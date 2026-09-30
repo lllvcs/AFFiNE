@@ -41,10 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       source-tag: ${{ steps.prepare.outputs.source-tag }}
-      build-type: ${{ steps.prepare.outputs.build-type }}
+      channel: ${{ steps.prepare.outputs.channel }}
       version: ${{ steps.prepare.outputs.version }}
       image-namespace: ${{ steps.prepare.outputs.image-namespace }}
-      dockerhub-namespace: ${{ steps.prepare.outputs.dockerhub-namespace }}
     steps:
       - uses: actions/checkout@v7
       - name: Resolve source tag
@@ -54,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.source-tag }}
           DOCKERHUB_ENABLED: ${{ inputs.dockerhub }}
-          DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub && secrets.DOCKER_USER || '' }}
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKER_USER }}
           DOCKERHUB_HAS_PASSWORD: ${{ secrets.DOCKER_PASSWORD != '' }}
           IMAGE_NAMESPACE: ${{ github.repository_owner }}
         run: |
@@ -67,7 +66,6 @@ jobs:
           version=""
           if [ -n "${INPUT_TAG}" ]; then
             source_tag="${INPUT_TAG}"
-            build_type="${source_tag%-*}"
           else
             run_id=$(gh run list --workflow=docker-build.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
             if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
@@ -82,23 +80,29 @@ jobs:
               exit 1
             fi
             source_tag=$(node -p "JSON.parse(require('node:fs').readFileSync('${meta_file}', 'utf8')).tag")
-            build_type=$(node -p "JSON.parse(require('node:fs').readFileSync('${meta_file}', 'utf8')).buildType")
             version=$(node -p "JSON.parse(require('node:fs').readFileSync('${meta_file}', 'utf8')).version ?? ''")
             echo "Using the image from build run ${run_id}."
           fi
 
+          # `<channel>-<short-hash>` is what the build workflow pushes; anything
+          # else (a version tag, a hand-made tag) has no channel of its own.
+          candidate="${source_tag%-*}"
+          case "${candidate}" in
+            canary | beta | stable | internal) channel="${candidate}" ;;
+            *) channel="" ;;
+          esac
+
           echo "source-tag=${source_tag}" >> "$GITHUB_OUTPUT"
-          echo "build-type=${build_type}" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "image-namespace=${IMAGE_NAMESPACE}" >> "$GITHUB_OUTPUT"
-          echo "dockerhub-namespace=${DOCKERHUB_NAMESPACE}" >> "$GITHUB_OUTPUT"
           {
             echo "Publishing \`ghcr.io/${IMAGE_NAMESPACE}/affine:${source_tag}\`"
             echo ""
-            echo "- channel: \`${build_type}\`"
+            echo "- channel tag: \`${channel:-none}\`"
             echo "- version tag: \`${version:-none}\`"
-            echo "- docker hub: \`${DOCKERHUB_NAMESPACE:-disabled}\`"
-            echo "- moving tags: \`${{ inputs.moving-tags }}\`"
+            echo "- docker hub: ${{ inputs.dockerhub }}"
+            echo "- moving tags: ${{ inputs.moving-tags }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
@@ -113,41 +117,53 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Login to Docker Hub
-        if: ${{ needs.prepare.outputs.dockerhub-namespace != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        # The namespace is read straight from the secret here: a job output that
+        # contains a secret arrives empty, which used to skip this step silently.
+        if: ${{ inputs.dockerhub }}
+        shell: bash
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKER_USER }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOCKERHUB_USER}" ] || [ -z "${DOCKERHUB_PASSWORD}" ]; then
+            echo "::error::Docker Hub publishing is enabled but the 'DOCKER_USER' and/or 'DOCKER_PASSWORD' repository secrets are empty. Add them under Settings → Secrets and variables → Actions, or untick the 'dockerhub' input."
+            exit 1
+          fi
+          echo "${DOCKERHUB_PASSWORD}" | docker login docker.io --username "${DOCKERHUB_USER}" --password-stdin
+          echo "DOCKERHUB_NAMESPACE=${DOCKERHUB_USER}" >> "$GITHUB_ENV"
       - name: Publish
         shell: bash
         env:
           SOURCE_TAG: ${{ needs.prepare.outputs.source-tag }}
           IMAGE_NAMESPACE: ${{ needs.prepare.outputs.image-namespace }}
-          DOCKERHUB_NAMESPACE: ${{ needs.prepare.outputs.dockerhub-namespace }}
-          BUILD_TYPE: ${{ needs.prepare.outputs.build-type }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
           VERSION: ${{ needs.prepare.outputs.version }}
           MOVING_TAGS: ${{ inputs.moving-tags }}
         run: |
           set -euo pipefail
           source="ghcr.io/${IMAGE_NAMESPACE}/affine:${SOURCE_TAG}"
-          images=("ghcr.io/${IMAGE_NAMESPACE}/affine")
-          if [ -n "${DOCKERHUB_NAMESPACE}" ]; then
+          ghcr_image="ghcr.io/${IMAGE_NAMESPACE}/affine"
+          images=("${ghcr_image}")
+          if [ -n "${DOCKERHUB_NAMESPACE:-}" ]; then
             images+=("docker.io/${DOCKERHUB_NAMESPACE}/affine")
           fi
 
           published=()
           for image in "${images[@]}"; do
-            # The GHCR copy already carries the immutable tag; Docker Hub needs it.
             tag_args=()
-            if [ "${image}" != "ghcr.io/${IMAGE_NAMESPACE}/affine" ]; then
+            # The GHCR copy already carries the immutable tag; Docker Hub needs it.
+            if [ "${image}" != "${ghcr_image}" ]; then
               tag_args+=(--tag "${image}:${SOURCE_TAG}")
             fi
             if [ "${MOVING_TAGS}" = "true" ]; then
-              tag_args+=(--tag "${image}:latest" --tag "${image}:${BUILD_TYPE}")
+              tag_args+=(--tag "${image}:latest")
+              if [ -n "${CHANNEL}" ]; then
+                tag_args+=(--tag "${image}:${CHANNEL}")
+              fi
               if [ -n "${VERSION}" ]; then
                 tag_args+=(--tag "${image}:${VERSION}")
               fi
