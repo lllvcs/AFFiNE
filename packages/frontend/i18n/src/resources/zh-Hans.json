@@ -1508,6 +1508,8 @@
   "com.affine.settings.workspace.byok.row.activity.failed": "{{date}} 失败",
   "com.affine.settings.workspace.byok.row.activity.unused": "尚未使用",
   "com.affine.settings.workspace.byok.coverage.title": "功能覆盖",
+  "com.affine.settings.workspace.byok.coverage.not-covered": "未被任何已启用的密钥覆盖。",
+  "com.affine.settings.workspace.byok.coverage.chat-not-covered": "AI 对话未被覆盖：请为某个模型启用「对话」用例（文本输出），否则对话请求会因找不到可用模型而失败。",
   "com.affine.settings.workspace.byok.feature.chat.title": "写作与聊天",
   "com.affine.settings.workspace.byok.feature.chat.fallback": "存在 OpenAI、Anthropic 或 Gemini BYOK 密钥时覆盖。",
   "com.affine.settings.workspace.byok.feature.action.title": "动作与结构化输出",

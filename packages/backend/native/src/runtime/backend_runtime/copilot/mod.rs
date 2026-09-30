@@ -10,6 +10,7 @@ use std::{
 
 pub(in crate::runtime::backend_runtime) use dispatch::{protocol as executable_protocol, provider as backend_provider};
 use gcp_auth::TokenProvider;
+use llm_adapter::capability::declared_model_matches;
 use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 use zeroize::Zeroizing;
@@ -20,8 +21,12 @@ use crate::{
     CopilotExecuteInput, CopilotRouteCheckInput,
     route::{self, AuthorizedProviderProfile, AuthorizedTargetRef, CredentialRef},
   },
-  runtime::{BackendRuntimeConfig, CopilotManagedProfileConfig},
+  runtime::{BackendRuntimeConfig, CopilotManagedProfileConfig, Deployment},
 };
+
+/// Cap on how many profiles/models a route failure diagnostic spells out, so a
+/// large workspace cannot turn one error message into a wall of text.
+const ROUTE_DIAGNOSTIC_LIMIT: usize = 8;
 
 pub(super) type ManagedTokenProviderCache = RwLock<HashMap<String, Arc<OnceCell<Arc<dyn TokenProvider>>>>>;
 pub(super) const COPILOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -344,10 +349,30 @@ impl BackendRuntime {
     }) {
       route::RouteDecision::Ready(candidates) => candidates,
       route::RouteDecision::Denied(reason) => {
-        return Err(RuntimeError::invalid_input(reason_name(reason)));
+        let detail = route_failure_detail(
+          reason,
+          &slot,
+          input.workspace_id.as_deref(),
+          config.deployment,
+          config.copilot.byok.enabled,
+          &input.access,
+          &profiles,
+        );
+        eprintln!("[affine-copilot] copilot route denied: {detail}");
+        return Err(RuntimeError::invalid_input(detail));
       }
       route::RouteDecision::NoRoute(reason) => {
-        return Err(RuntimeError::invalid_state(reason_name(reason)));
+        let detail = route_failure_detail(
+          reason,
+          &slot,
+          input.workspace_id.as_deref(),
+          config.deployment,
+          config.copilot.byok.enabled,
+          &input.access,
+          &profiles,
+        );
+        eprintln!("[affine-copilot] copilot route unavailable: {detail}");
+        return Err(RuntimeError::invalid_state(detail));
       }
     };
     Ok(AuthorizedCopilotRoute {
@@ -422,4 +447,83 @@ fn reason_name(reason: route::RouteDecisionReason) -> &'static str {
     route::RouteDecisionReason::NoCompatibleTarget => "no_compatible_target",
     route::RouteDecisionReason::ManagedPresetUnavailable => "managed_preset_unavailable",
   }
+}
+
+fn profile_source_name(source: route::ProfileSource) -> &'static str {
+  match source {
+    route::ProfileSource::Server => "server",
+    route::ProfileSource::Local => "local",
+    route::ProfileSource::Managed => "managed",
+  }
+}
+
+fn deployment_name(deployment: Deployment) -> &'static str {
+  match deployment {
+    Deployment::Cloud => "cloud",
+    Deployment::SelfHosted => "selfhosted",
+  }
+}
+
+/// Diagnostics for a failed route decision.
+///
+/// The reason name stays the leading token (callers match on it, see
+/// `mapNativeSemanticError` in the server layer), followed by the routing inputs
+/// that produced it: the requested slot, the workspace the request carried, the
+/// access projection, and every loaded profile with each model's capability match
+/// against that slot. Without this, `no_compatible_target` is impossible to act
+/// on - a wrong workspace, a disabled key and a model missing the required
+/// capability all look identical from the outside.
+fn route_failure_detail(
+  reason: route::RouteDecisionReason,
+  slot: &route::CatalogSlot,
+  workspace_id: Option<&str>,
+  deployment: Deployment,
+  byok_enabled: bool,
+  access: &crate::llm::CopilotAccessProjection,
+  profiles: &[AuthorizedProviderProfile],
+) -> String {
+  let mut detail = format!(
+    "{}: slot={} workspace={} deployment={} copilot.byok.enabled={} serverByok={} localByok={} profiles={}",
+    reason_name(reason),
+    slot.id,
+    workspace_id.unwrap_or("<none>"),
+    deployment_name(deployment),
+    byok_enabled,
+    access.server_byok,
+    access.local_byok,
+    profiles.len(),
+  );
+  if profiles.is_empty() {
+    detail.push_str(
+      " (no BYOK profile was loaded for this workspace: check that the key is configured in THIS workspace, that it is enabled, and that the copilot.byok runtime policy allows it)",
+    );
+  }
+  for (index, profile) in profiles.iter().take(ROUTE_DIAGNOSTIC_LIMIT).enumerate() {
+    if index > 0 {
+      detail.push_str(" |");
+    }
+    detail.push_str(&format!(
+      " {}/{}:{}",
+      profile_source_name(profile.source),
+      profile.provider,
+      profile.profile_id,
+    ));
+    for (model_index, model) in profile.models.iter().take(ROUTE_DIAGNOSTIC_LIMIT).enumerate() {
+      detail.push_str(&format!(
+        "{} {} enabled={} matchesSlot={} capabilities={}",
+        if model_index == 0 { "" } else { "," },
+        model.model_id,
+        model.enabled,
+        declared_model_matches(&model.capabilities, &slot.requirements),
+        serde_json::to_string(&model.capabilities).unwrap_or_else(|_| "<unserializable>".to_string()),
+      ));
+    }
+    if profile.models.len() > ROUTE_DIAGNOSTIC_LIMIT {
+      detail.push_str(&format!(" (+{} more models)", profile.models.len() - ROUTE_DIAGNOSTIC_LIMIT));
+    }
+  }
+  if profiles.len() > ROUTE_DIAGNOSTIC_LIMIT {
+    detail.push_str(&format!(" | (+{} more profiles)", profiles.len() - ROUTE_DIAGNOSTIC_LIMIT));
+  }
+  detail
 }

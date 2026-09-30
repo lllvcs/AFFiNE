@@ -130,6 +130,12 @@ export const rowDescription = style({
   color: cssVarV2('text/secondary'),
 });
 
+export const rowWarning = style({
+  fontSize: cssVar('fontXs'),
+  fontWeight: 500,
+  color: cssVarV2('status/error'),
+});
+
 export const tags = style({
   display: 'flex',
   flexWrap: 'wrap',

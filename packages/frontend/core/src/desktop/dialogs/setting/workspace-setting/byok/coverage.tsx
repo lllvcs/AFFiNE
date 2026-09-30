@@ -79,6 +79,19 @@ export const CoveragePanel = ({ keys }: { keys: ByokKey[] }) => {
                 <div className={styles.rowDescription}>
                   {byokT(t, row.fallbackKey)}
                 </div>
+                {covered ? null : (
+                  <div
+                    className={styles.rowWarning}
+                    data-testid={`workspace-byok-coverage-${row.featureKind}-warning`}
+                  >
+                    {byokT(
+                      t,
+                      row.featureKind === 'chat'
+                        ? 'coverage.chat-not-covered'
+                        : 'coverage.not-covered'
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );

@@ -84,6 +84,10 @@ async fn load_server_profiles(
       let definition = serde_json::from_value::<ByokProfileDefinition>(row.definition)
         .map_err(|error| RuntimeError::json("invalid stored BYOK definition", error))?;
       if !policy.allows(&row.provider, &definition.endpoint) {
+        eprintln!(
+          "[affine-copilot] skipping stored BYOK profile {} (workspace {}, provider {}): the copilot.byok runtime policy does not allow this endpoint - check copilot.byok.enabled / allowedProviders / allowCustomEndpoint / allowPrivateEndpoint",
+          row.id, row.workspace_id, row.provider
+        );
         return Ok(None);
       }
       let aad = server_aad(

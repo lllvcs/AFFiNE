@@ -1560,6 +1560,8 @@
   "com.affine.settings.workspace.byok.row.activity.failed": "failed {{date}}",
   "com.affine.settings.workspace.byok.row.activity.unused": "not used yet",
   "com.affine.settings.workspace.byok.coverage.title": "Feature coverage",
+  "com.affine.settings.workspace.byok.coverage.not-covered": "Not covered by any enabled key.",
+  "com.affine.settings.workspace.byok.coverage.chat-not-covered": "AI chat is not covered: enable a key whose model declares the \"Chat\" use case (text output), otherwise chat requests fail with no compatible model.",
   "com.affine.settings.workspace.byok.feature.chat.title": "Writing and chat",
   "com.affine.settings.workspace.byok.feature.chat.fallback": "Covered when an OpenAI, Anthropic, or Gemini BYOK key exists.",
   "com.affine.settings.workspace.byok.feature.action.title": "Actions and structured output",

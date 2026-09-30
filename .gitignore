@@ -29,6 +29,10 @@ node_modules
 *.sublime-workspace
 .scratch/*
 
+# local cargo caches (the repo tracks .cargo/config.toml)
+.cargo/*
+!.cargo/config.toml
+
 # IDE - VSCode
 .vscode/*
 !.vscode/settings.template.json
