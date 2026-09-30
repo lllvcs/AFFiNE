@@ -49,8 +49,8 @@ function routeFailureMessage(reason: RouteFailureReason, message: string) {
     default:
       return (
         `No AI model is configured for this request${slot ? ` (${slot})` : ''}.` +
-        ' Open Settings → Workspace → AI: add a bring-your-own-key model in the workspace you are chatting in, make sure it is enabled, and make sure it declares the capability this feature needs' +
-        ' — for chat, enable the "Chat" use case (text output).'
+        ' Open Settings → Workspace → AI: add a bring-your-own-key model in the workspace you are chatting in, make sure it is enabled, and make sure its use cases cover what this request needs.' +
+        ' AFFiNE AI sends tool definitions with every chat message, so chat needs both the "Chat" use case (text output) and the "Actions" use case (tool calling).'
       );
   }
 }

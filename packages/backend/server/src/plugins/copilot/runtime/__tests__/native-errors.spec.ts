@@ -16,7 +16,10 @@ ava('bare no_compatible_target becomes an actionable bad request', t => {
   const message = (mapped as BadRequest).message;
   t.regex(message, /No AI model is configured for this request/);
   t.regex(message, /Settings → Workspace → AI/);
-  t.regex(message, /"Chat" use case/);
+  t.regex(message, /"Chat" use case \(text output\)/);
+  // Chat requests always carry tool definitions, so the route demands tool calling
+  // on top of text output - say so instead of sending users on a wild goose chase.
+  t.regex(message, /"Actions" use case \(tool calling\)/);
 });
 
 ava('the native route diagnostic stays out of the user facing message', t => {

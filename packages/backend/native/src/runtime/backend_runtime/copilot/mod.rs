@@ -483,9 +483,10 @@ fn route_failure_detail(
   profiles: &[AuthorizedProviderProfile],
 ) -> String {
   let mut detail = format!(
-    "{}: slot={} workspace={} deployment={} copilot.byok.enabled={} serverByok={} localByok={} profiles={}",
+    "{}: slot={} required={} workspace={} deployment={} copilot.byok.enabled={} serverByok={} localByok={} profiles={}",
     reason_name(reason),
     slot.id,
+    serde_json::to_string(&slot.requirements).unwrap_or_else(|_| "<unserializable>".to_string()),
     workspace_id.unwrap_or("<none>"),
     deployment_name(deployment),
     byok_enabled,
