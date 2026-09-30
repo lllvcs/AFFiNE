@@ -1,7 +1,8 @@
 name: Publish Docker Image
 
-# Manual-only publishing: builds the server image (amd64/arm64 by default) and
-# pushes it to GitHub Container Registry and, when enabled, Docker Hub.
+# Manual-only publishing: builds the server image (linux/amd64, linux/arm64 and
+# linux/arm/v7) and pushes it to GitHub Container Registry and, when enabled,
+# Docker Hub.
 #
 # Required repository secrets:
 #   DOCKER_USER      - Docker Hub account name (also used as the image namespace)
@@ -25,14 +26,6 @@ on:
         description: 'Version (optional, e.g. 0.26.0). Defaults to <date>-<channel>.<HHMM>'
         type: string
         required: false
-      platforms:
-        description: 'Target platforms'
-        type: choice
-        options:
-          - 'linux/amd64,linux/arm64'
-          - 'linux/amd64'
-          - 'linux/amd64,linux/arm64,linux/arm/v7'
-        default: 'linux/amd64,linux/arm64'
       dockerhub:
         description: 'Also publish to Docker Hub'
         type: boolean
@@ -71,7 +64,6 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.app-version }}
           BUILD_TYPE: ${{ inputs.build-type }}
-          PLATFORMS: ${{ inputs.platforms }}
           DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub && secrets.DOCKER_USER || '' }}
         run: |
           set -euo pipefail
@@ -86,7 +78,7 @@ jobs:
           {
             echo "Publishing version \`${app_version}\` (\`${git_short_hash}\`) as \`${BUILD_TYPE}\`"
             echo ""
-            echo "- platforms: \`${PLATFORMS}\`"
+            echo "- platforms: \`linux/amd64,linux/arm64,linux/arm/v7\`"
             echo "- admin bundle: \`${{ inputs.include-admin }}\`"
             echo "- mobile bundle: \`${{ inputs.include-mobile }}\`"
             echo "- docker hub: \`${DOCKERHUB_NAMESPACE:-disabled}\`"
@@ -104,7 +96,6 @@ jobs:
       git-short-hash: ${{ needs.prepare.outputs.git-short-hash }}
       image-namespace: ${{ github.repository_owner }}
       dockerhub-namespace: ${{ needs.prepare.outputs.dockerhub-namespace }}
-      platforms: ${{ inputs.platforms }}
       build-admin: ${{ inputs.include-admin }}
       build-mobile: ${{ inputs.include-mobile }}
 
