@@ -43,7 +43,6 @@ jobs:
       source-tag: ${{ steps.prepare.outputs.source-tag }}
       channel: ${{ steps.prepare.outputs.channel }}
       version: ${{ steps.prepare.outputs.version }}
-      image-namespace: ${{ steps.prepare.outputs.image-namespace }}
     steps:
       - uses: actions/checkout@v7
       - name: Resolve source tag
@@ -53,12 +52,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           INPUT_TAG: ${{ inputs.source-tag }}
           DOCKERHUB_ENABLED: ${{ inputs.dockerhub }}
-          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKER_USER }}
+          # Only booleans, never the secret values themselves: a job output whose
+          # value collides with a secret value is dropped by GitHub, and the
+          # secret is not needed to validate the configuration here anyway.
+          DOCKERHUB_HAS_USER: ${{ secrets.DOCKER_USER != '' }}
           DOCKERHUB_HAS_PASSWORD: ${{ secrets.DOCKER_PASSWORD != '' }}
           IMAGE_NAMESPACE: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          if [ "${DOCKERHUB_ENABLED}" = "true" ] && { [ -z "${DOCKERHUB_NAMESPACE}" ] || [ "${DOCKERHUB_HAS_PASSWORD}" != "true" ]; }; then
+          if [ "${DOCKERHUB_ENABLED}" = "true" ] && { [ "${DOCKERHUB_HAS_USER}" != "true" ] || [ "${DOCKERHUB_HAS_PASSWORD}" != "true" ]; }; then
             echo "::error::Docker Hub publishing is enabled but the 'DOCKER_USER' and/or 'DOCKER_PASSWORD' repository secrets are empty. Add them under Settings → Secrets and variables → Actions, or untick the 'dockerhub' input."
             exit 1
           fi
@@ -95,7 +97,6 @@ jobs:
           echo "source-tag=${source_tag}" >> "$GITHUB_OUTPUT"
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "image-namespace=${IMAGE_NAMESPACE}" >> "$GITHUB_OUTPUT"
           {
             echo "Publishing \`ghcr.io/${IMAGE_NAMESPACE}/affine:${source_tag}\`"
             echo ""
@@ -139,7 +140,12 @@ jobs:
         shell: bash
         env:
           SOURCE_TAG: ${{ needs.prepare.outputs.source-tag }}
-          IMAGE_NAMESPACE: ${{ needs.prepare.outputs.image-namespace }}
+          # Read from the context, not from a job output: the previous build
+          # passed this through `prepare`, and because the owner name equals the
+          # DOCKER_USER secret value GitHub stripped the output, leaving an empty
+          # namespace and a `ghcr.io//affine:<tag>` source that cannot be pulled.
+          IMAGE_NAMESPACE: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
           VERSION: ${{ needs.prepare.outputs.version }}
           MOVING_TAGS: ${{ inputs.moving-tags }}
@@ -147,6 +153,13 @@ jobs:
           set -euo pipefail
           source="ghcr.io/${IMAGE_NAMESPACE}/affine:${SOURCE_TAG}"
           ghcr_image="ghcr.io/${IMAGE_NAMESPACE}/affine"
+          if ! docker buildx imagetools inspect "${source}" >/dev/null 2>&1; then
+            echo "::error::Source image '${source}' does not exist in GHCR."
+            echo "Tags available in ${ghcr_image}:"
+            gh api "/users/${IMAGE_NAMESPACE}/packages/container/affine/versions" \
+              --jq '.[].metadata.container.tags[]' 2>/dev/null | sed 's/^/  - /' || true
+            exit 1
+          fi
           images=("${ghcr_image}")
           if [ -n "${DOCKERHUB_NAMESPACE:-}" ]; then
             images+=("docker.io/${DOCKERHUB_NAMESPACE}/affine")
