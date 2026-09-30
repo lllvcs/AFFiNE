@@ -39,11 +39,6 @@ on:
         type: boolean
         required: false
         default: true
-      server-native-targets:
-        description: 'JSON matrix of Rust targets to build.'
-        type: string
-        required: false
-        default: '[{"name":"x86_64-unknown-linux-gnu","file":"server-native.x64.node"},{"name":"aarch64-unknown-linux-gnu","file":"server-native.arm64.node"},{"name":"armv7-unknown-linux-gnueabihf","file":"server-native.armv7.node"}]'
     secrets:
       DOCKER_USER:
         required: false
@@ -179,7 +174,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        targets: ${{ fromJSON(inputs.server-native-targets) }}
+        # All three arches are required: the napi loader in
+        # packages/backend/native/index.js references each one from a `catch`
+        # block, so the server bundle fails to resolve any missing .node file.
+        targets:
+          - name: x86_64-unknown-linux-gnu
+            file: server-native.x64.node
+          - name: aarch64-unknown-linux-gnu
+            file: server-native.arm64.node
+          - name: armv7-unknown-linux-gnueabihf
+            file: server-native.armv7.node
     steps:
       - uses: actions/checkout@v7
       - name: Setup Version
