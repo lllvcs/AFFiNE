@@ -64,9 +64,18 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.app-version }}
           BUILD_TYPE: ${{ inputs.build-type }}
+          DOCKERHUB_ENABLED: ${{ inputs.dockerhub }}
           DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub && secrets.DOCKER_USER || '' }}
+          DOCKERHUB_HAS_PASSWORD: ${{ secrets.DOCKER_PASSWORD != '' }}
         run: |
           set -euo pipefail
+          # Docker Hub is addressed as docker.io/<DOCKER_USER>/affine, so the
+          # account name doubles as the image namespace. Fail loudly instead of
+          # silently publishing to GHCR only.
+          if [ "${DOCKERHUB_ENABLED}" = "true" ] && { [ -z "${DOCKERHUB_NAMESPACE}" ] || [ "${DOCKERHUB_HAS_PASSWORD}" != "true" ]; }; then
+            echo "::error::Docker Hub publishing is enabled but the 'DOCKER_USER' and/or 'DOCKER_PASSWORD' repository secrets are empty. Add them under Settings → Secrets and variables → Actions, or untick the 'dockerhub' input."
+            exit 1
+          fi
           git_short_hash=$(git rev-parse --short HEAD)
           app_version="${INPUT_VERSION}"
           if [ -z "${app_version}" ]; then

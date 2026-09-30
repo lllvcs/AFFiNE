@@ -344,14 +344,24 @@ jobs:
           DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub-namespace }}
           TAG_SUFFIX: ${{ inputs.build-type }}-${{ inputs.git-short-hash }}
         run: |
+          set -euo pipefail
+          tags="ghcr.io/${IMAGE_NAMESPACE}/affine:${TAG_SUFFIX}"
+          if [ -n "${DOCKERHUB_NAMESPACE}" ]; then
+            tags="${tags}"$'\n'"docker.io/${DOCKERHUB_NAMESPACE}/affine:${TAG_SUFFIX}"
+          fi
           {
             echo "tags<<EOF"
-            echo "ghcr.io/${IMAGE_NAMESPACE}/affine:${TAG_SUFFIX}"
-            if [ -n "${DOCKERHUB_NAMESPACE}" ]; then
-              echo "docker.io/${DOCKERHUB_NAMESPACE}/affine:${TAG_SUFFIX}"
-            fi
+            echo "${tags}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "### Pushed images"
+            echo ""
+            echo '```'
+            echo "${tags}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build backend Dockerfile
         uses: docker/build-push-action@v6
@@ -363,3 +373,24 @@ jobs:
           provenance: true
           file: .github/deployment/node/Dockerfile
           tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Make the GHCR package public
+        # GHCR packages start out private, so anonymous pulls would 401 even
+        # though the repository is public. Best effort: the image is already
+        # pushed at this point.
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          IMAGE_NAMESPACE: ${{ inputs.image-namespace || github.repository_owner }}
+        run: |
+          set -uo pipefail
+          for endpoint in \
+            "/user/packages/container/affine" \
+            "/orgs/${IMAGE_NAMESPACE}/packages/container/affine"; do
+            if gh api --method PATCH "${endpoint}" -f visibility=public >/dev/null 2>&1; then
+              echo "GHCR package 'affine' is public (via ${endpoint})."
+              exit 0
+            fi
+          done
+          echo "::warning::Could not change the GHCR package visibility automatically (the token needs the packages write scope). Set it by hand: https://github.com/users/${IMAGE_NAMESPACE}/packages/container/affine/settings → Change visibility → Public."
