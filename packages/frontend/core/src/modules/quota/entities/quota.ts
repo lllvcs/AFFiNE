@@ -34,12 +34,27 @@ type QuotaType = {
 const logger = new DebugLogger('affine:workspace-permission');
 const DAY_SECONDS = 24 * 60 * 60;
 
+/**
+ * Mirrors the self-hosted ceilings in
+ * `packages/backend/native/src/entitlement.rs`: values at or above these are
+ * rendered as "Unlimited" instead of a misleading number.
+ */
+const UNLIMITED_STORAGE_QUOTA = 2 ** 53 - 1;
+const UNLIMITED_SEAT_LIMIT = 2 ** 31 - 1;
+const UNLIMITED_HISTORY_PERIOD = 100 * 365 * DAY_SECONDS;
+
 function formatSize(size: number) {
+  if (size >= UNLIMITED_STORAGE_QUOTA) return 'Unlimited';
   return size === 0 ? '0 B' : (bytes.format(size) ?? '0 B');
 }
 
 function formatHistoryPeriod(value: number) {
+  if (value >= UNLIMITED_HISTORY_PERIOD) return 'Unlimited';
   return `${(value / DAY_SECONDS).toFixed(0)} days`;
+}
+
+function formatMemberLimit(limit: number) {
+  return limit >= UNLIMITED_SEAT_LIMIT ? 'Unlimited' : limit.toString();
 }
 
 function planName(plan: string) {
@@ -77,7 +92,7 @@ function workspaceQuotaFromState(
       blobLimit: formatSize(state.blobLimit),
       storageQuota: formatSize(state.storageQuota),
       historyPeriod: formatHistoryPeriod(state.historyPeriodSeconds),
-      memberLimit: state.seatLimit.toString(),
+      memberLimit: formatMemberLimit(state.seatLimit),
       memberCount: state.memberCount.toString(),
       overcapacityMemberCount: state.overcapacityMemberCount.toString(),
     },
@@ -112,7 +127,7 @@ export class WorkspaceQuota extends Entity {
   /** Maximum storage limit in bytes */
   max$ = this.quota$.map(quota => (quota ? quota.storageQuota : null));
   /** Maximum storage limit formatted */
-  maxFormatted$ = this.max$.map(max => (max ? bytes.format(max) : null));
+  maxFormatted$ = this.max$.map(max => (max ? formatSize(max) : null));
 
   /** Percentage of storage used */
   percent$ = LiveData.computed(get => {

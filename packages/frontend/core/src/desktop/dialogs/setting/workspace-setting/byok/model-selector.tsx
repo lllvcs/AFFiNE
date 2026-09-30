@@ -21,17 +21,28 @@ import {
 } from './model-utils';
 import type { ByokKey } from './types';
 
+const NO_DISCOVERED_MODELS: {
+  modelId: string;
+  displayName: string | null;
+}[] = [];
+
 export const ModelSelector = ({
   customEndpoint,
   catalog,
+  discovered = NO_DISCOVERED_MODELS,
   models,
   validation,
+  onFetchModels,
+  fetchingModels,
   onChange,
 }: {
   customEndpoint: boolean;
   catalog: ReturnType<typeof catalogModels>;
+  discovered?: { modelId: string; displayName: string | null }[];
   models: ModelDeclaration[];
   validation?: ByokKey['validation'];
+  onFetchModels?: () => void;
+  fetchingModels?: boolean;
   onChange: (models: ModelDeclaration[]) => void;
 }) => {
   const t = useI18n();
@@ -79,6 +90,18 @@ export const ModelSelector = ({
         <span className={styles.description}>
           {byokT(t, 'models.description.order')}
         </span>
+        {onFetchModels ? (
+          <Button
+            variant="secondary"
+            disabled={fetchingModels}
+            onClick={onFetchModels}
+          >
+            {byokT(
+              t,
+              fetchingModels ? 'action.fetching-models' : 'action.fetch-models'
+            )}
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           onClick={() => {
@@ -207,6 +230,7 @@ export const ModelSelector = ({
         open={editorOpen}
         customEndpoint={customEndpoint}
         catalog={catalog}
+        discovered={discovered}
         models={models}
         editingModel={editingIndex === null ? null : models[editingIndex]}
         onOpenChange={open => {

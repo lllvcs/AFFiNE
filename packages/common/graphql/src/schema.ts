@@ -411,6 +411,7 @@ export enum ByokCustomEndpointMode {
 }
 
 export enum ByokEndpointKind {
+  anthropic_compatible = 'anthropic_compatible',
   openai_compatible = 'openai_compatible',
   provider_default = 'provider_default',
 }
@@ -1620,6 +1621,15 @@ export interface ListUserInput {
   skip?: InputMaybe<Scalars['Int']['input']>;
 }
 
+export interface ListWorkspaceByokModelsInput {
+  credential?: InputMaybe<Scalars['String']['input']>;
+  endpoint: WorkspaceByokEndpointInput;
+  expectedRevision?: InputMaybe<Scalars['SafeInt']['input']>;
+  profileId?: InputMaybe<Scalars['ID']['input']>;
+  provider: ByokProvider;
+  workspaceId: Scalars['String']['input'];
+}
+
 export interface ListWorkspaceInput {
   enableAi?: InputMaybe<Scalars['Boolean']['input']>;
   enableDocEmbedding?: InputMaybe<Scalars['Boolean']['input']>;
@@ -1816,6 +1826,7 @@ export interface Mutation {
   leaveWorkspace: Scalars['Boolean']['output'];
   linkCalDAVAccount: CalendarAccountObjectType;
   linkCalendarAccount: Scalars['String']['output'];
+  listWorkspaceByokModels: Array<WorkspaceByokProviderModelType>;
   /** mention user in a doc */
   mentionUser: Scalars['ID']['output'];
   previewLicense: AdminLicensePreview;
@@ -2111,6 +2122,10 @@ export interface MutationLinkCalDavAccountArgs {
 
 export interface MutationLinkCalendarAccountArgs {
   input: LinkCalendarAccountInput;
+}
+
+export interface MutationListWorkspaceByokModelsArgs {
+  input: ListWorkspaceByokModelsInput;
 }
 
 export interface MutationMentionUserArgs {
@@ -3501,6 +3516,12 @@ export interface WorkspaceByokProfileType {
   sortOrder: Scalars['SafeInt']['output'];
   validation: Maybe<WorkspaceByokValidationType>;
   workspaceId: Scalars['String']['output'];
+}
+
+export interface WorkspaceByokProviderModelType {
+  __typename?: 'WorkspaceByokProviderModelType';
+  displayName: Maybe<Scalars['String']['output']>;
+  modelId: Scalars['String']['output'];
 }
 
 export interface WorkspaceByokSettingsType {
@@ -7439,6 +7460,19 @@ export type CreateWorkspaceByokLocalLeaseMutation = {
   };
 };
 
+export type ListWorkspaceByokModelsMutationVariables = Exact<{
+  input: ListWorkspaceByokModelsInput;
+}>;
+
+export type ListWorkspaceByokModelsMutation = {
+  __typename?: 'Mutation';
+  listWorkspaceByokModels: Array<{
+    __typename?: 'WorkspaceByokProviderModelType';
+    modelId: string;
+    displayName: string | null;
+  }>;
+};
+
 export type ReorderWorkspaceByokProfilesMutationVariables = Exact<{
   input: ReorderWorkspaceByokProfilesInput;
 }>;
@@ -8583,6 +8617,11 @@ export type Mutations =
       name: 'createWorkspaceByokLocalLeaseMutation';
       variables: CreateWorkspaceByokLocalLeaseMutationVariables;
       response: CreateWorkspaceByokLocalLeaseMutation;
+    }
+  | {
+      name: 'listWorkspaceByokModelsMutation';
+      variables: ListWorkspaceByokModelsMutationVariables;
+      response: ListWorkspaceByokModelsMutation;
     }
   | {
       name: 'reorderWorkspaceByokProfilesMutation';

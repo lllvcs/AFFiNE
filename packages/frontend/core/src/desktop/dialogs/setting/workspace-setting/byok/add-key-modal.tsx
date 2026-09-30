@@ -5,6 +5,7 @@ import {
   ByokOpenAiDialect,
   ByokProvider,
   createWorkspaceByokProfileMutation,
+  listWorkspaceByokModelsMutation,
   probeWorkspaceByokDraftMutation,
   replaceWorkspaceByokProfileMutation,
 } from '@affine/graphql';
@@ -31,6 +32,13 @@ import {
 } from './model-utils';
 import type { ByokDefinition, ByokKey, ByokSettings, GqlFn } from './types';
 import { ByokStorage } from './types';
+
+function isCustomEndpointKind(kind?: ByokEndpointKind | null) {
+  return (
+    kind === ByokEndpointKind.openai_compatible ||
+    kind === ByokEndpointKind.anthropic_compatible
+  );
+}
 
 export const AddKeyModal = ({
   workspaceId,
@@ -70,6 +78,10 @@ export const AddKeyModal = ({
   const [endpoint, setEndpoint] = useState('');
   const [dialect, setDialect] = useState<ByokOpenAiDialect | null>(null);
   const [models, setModels] = useState<ModelDeclaration[]>([]);
+  const [discovered, setDiscovered] = useState<
+    { modelId: string; displayName: string | null }[]
+  >([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [testStatus, setTestStatus] = useState<'passed' | 'failed' | null>(
     null
   );
@@ -79,11 +91,16 @@ export const AddKeyModal = ({
   const localStorageUnavailable = !localStorageSupported || !canAddLocalKey;
   const localStorageDisabled = !!editingKey || localStorageUnavailable;
   const customEndpointMode = settings.policy.customEndpointMode;
+  const supportsCustomEndpoint =
+    provider === ByokProvider.openai || provider === ByokProvider.anthropic;
+  // FAL has no model listing endpoint, so the fetch action is hidden for it.
+  const supportsModelListing = provider !== ByokProvider.fal;
   const showCustomEndpoint =
-    provider === ByokProvider.openai &&
+    supportsCustomEndpoint &&
     customEndpointMode !== ByokCustomEndpointMode.unavailable;
   const customEndpointEnabled =
     customEndpointMode === ByokCustomEndpointMode.enabled;
+  const dialectRequired = customEndpoint && provider === ByokProvider.openai;
 
   const endpointHint = endpointHintKey(
     customEndpointMode,
@@ -109,12 +126,12 @@ export const AddKeyModal = ({
     setEndpoint(editingKey?.definition.endpoint.url ?? '');
     setDialect(editingKey?.definition.endpoint.dialect ?? null);
     setCustomEndpoint(
-      editingKey?.definition.endpoint.kind ===
-        ByokEndpointKind.openai_compatible
+      isCustomEndpointKind(editingKey?.definition.endpoint.kind)
     );
     setModels(
       editingKey?.definition.models ?? defaultModels(settings, nextProvider)
     );
+    setDiscovered([]);
     setTestStatus(null);
     setIncludeImageProbe(false);
   }, [canAddServerKey, editingKey, open, settings]);
@@ -123,9 +140,12 @@ export const AddKeyModal = ({
     () => ({
       endpoint: customEndpoint
         ? {
-            kind: ByokEndpointKind.openai_compatible,
+            kind:
+              provider === ByokProvider.anthropic
+                ? ByokEndpointKind.anthropic_compatible
+                : ByokEndpointKind.openai_compatible,
             url: endpoint,
-            dialect,
+            dialect: provider === ByokProvider.anthropic ? null : dialect,
           }
         : {
             kind: ByokEndpointKind.provider_default,
@@ -134,7 +154,7 @@ export const AddKeyModal = ({
           },
       models,
     }),
-    [customEndpoint, dialect, endpoint, models]
+    [customEndpoint, dialect, endpoint, models, provider]
   );
 
   const invalidateTest = () => setTestStatus(null);
@@ -183,6 +203,46 @@ export const AddKeyModal = ({
     provider,
     workspaceId,
   ]);
+
+  const fetchModels = useCallback(async () => {
+    if (!gql) return;
+    setFetchingModels(true);
+    try {
+      const canReuseServerCredential =
+        editingKey?.storage === ByokStorage.server && !apiKey;
+      const result = await gql({
+        query: listWorkspaceByokModelsMutation,
+        variables: {
+          input: {
+            workspaceId,
+            provider,
+            credential: apiKey || null,
+            profileId: canReuseServerCredential ? editingKey.id : null,
+            expectedRevision: canReuseServerCredential
+              ? (editingKey.revision ?? null)
+              : null,
+            endpoint: definition.endpoint,
+          },
+        },
+      });
+      const found = result.listWorkspaceByokModels;
+      setDiscovered(found);
+      notify.success({
+        title: byokT(t, 'notify.models-fetched.title'),
+        message: byokT(t, 'notify.models-fetched.message', {
+          count: found.length,
+        }),
+      });
+    } catch (error) {
+      logByokError('Failed to list BYOK provider models', error);
+      notify.error({
+        title: byokT(t, 'notify.models-fetch-failed.title'),
+        message: byokT(t, 'notify.operation-failed.message'),
+      });
+    } finally {
+      setFetchingModels(false);
+    }
+  }, [apiKey, definition.endpoint, editingKey, gql, provider, t, workspaceId]);
 
   const persist = useCallback(
     async (persistedDefinition = definition) => {
@@ -319,7 +379,8 @@ export const AddKeyModal = ({
         model.modelId.trim() && (!model.enabled || model.capabilities.length)
     ) &&
     new Set(models.map(model => model.modelId.trim())).size === models.length &&
-    (!customEndpoint || (!!endpoint.trim() && dialect !== null));
+    (!customEndpoint ||
+      (!!endpoint.trim() && (!dialectRequired || dialect !== null)));
 
   return (
     <Modal
@@ -412,6 +473,7 @@ export const AddKeyModal = ({
               value={apiKey}
               onChange={value => {
                 setApiKey(value);
+                setDiscovered([]);
                 invalidateTest();
               }}
               type="password"
@@ -464,6 +526,7 @@ export const AddKeyModal = ({
                       value={endpoint}
                       onChange={value => {
                         setEndpoint(value);
+                        setDiscovered([]);
                         invalidateTest();
                       }}
                       placeholder="https://api.example.com/v1"
@@ -474,29 +537,31 @@ export const AddKeyModal = ({
                       </span>
                     ) : null}
                   </label>
-                  <label className={styles.field}>
-                    <span className={styles.label}>
-                      {byokT(t, 'field.dialect')}
-                    </span>
-                    <select
-                      className={styles.input}
-                      value={dialect ?? ''}
-                      onChange={event => {
-                        setDialect(event.target.value as ByokOpenAiDialect);
-                        invalidateTest();
-                      }}
-                    >
-                      <option value="" disabled>
-                        {byokT(t, 'placeholder.dialect')}
-                      </option>
-                      <option value={ByokOpenAiDialect.responses}>
-                        {byokT(t, 'dialect.responses')}
-                      </option>
-                      <option value={ByokOpenAiDialect.chat_completions}>
-                        {byokT(t, 'dialect.chat-completions')}
-                      </option>
-                    </select>
-                  </label>
+                  {dialectRequired ? (
+                    <label className={styles.field}>
+                      <span className={styles.label}>
+                        {byokT(t, 'field.dialect')}
+                      </span>
+                      <select
+                        className={styles.input}
+                        value={dialect ?? ''}
+                        onChange={event => {
+                          setDialect(event.target.value as ByokOpenAiDialect);
+                          invalidateTest();
+                        }}
+                      >
+                        <option value="" disabled>
+                          {byokT(t, 'placeholder.dialect')}
+                        </option>
+                        <option value={ByokOpenAiDialect.responses}>
+                          {byokT(t, 'dialect.responses')}
+                        </option>
+                        <option value={ByokOpenAiDialect.chat_completions}>
+                          {byokT(t, 'dialect.chat-completions')}
+                        </option>
+                      </select>
+                    </label>
+                  ) : null}
                 </>
               ) : null}
             </>
@@ -517,8 +582,22 @@ export const AddKeyModal = ({
           <ModelSelector
             customEndpoint={customEndpoint}
             catalog={providerCatalog}
+            discovered={discovered}
             models={models}
             validation={editingKey?.validation}
+            onFetchModels={
+              supportsModelListing
+                ? () => {
+                    fetchModels().catch(error => {
+                      logByokError(
+                        'Failed to list BYOK provider models',
+                        error
+                      );
+                    });
+                  }
+                : undefined
+            }
+            fetchingModels={fetchingModels || busy || !hasCredential}
             onChange={models => {
               setModels(models);
               invalidateTest();

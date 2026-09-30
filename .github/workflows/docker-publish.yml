@@ -1,0 +1,136 @@
+name: Publish Docker Image
+
+# Manual-only publishing: builds the server image (amd64/arm64 by default) and
+# pushes it to GitHub Container Registry and, when enabled, Docker Hub.
+#
+# Required repository secrets:
+#   DOCKER_USER      - Docker Hub account name (also used as the image namespace)
+#   DOCKER_PASSWORD  - Docker Hub access token
+#   GH_TOKEN         - optional PAT used to push to GHCR; falls back to GITHUB_TOKEN
+#
+# Without DOCKER_USER/DOCKER_PASSWORD only GHCR (`ghcr.io/<owner>/affine`) is used.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: 'Release channel'
+        type: choice
+        options:
+          - canary
+          - beta
+          - stable
+        default: canary
+      app-version:
+        description: 'Version (optional, e.g. 0.26.0). Defaults to <date>-<channel>.<HHMM>'
+        type: string
+        required: false
+      platforms:
+        description: 'Target platforms'
+        type: choice
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/amd64,linux/arm64,linux/arm/v7'
+        default: 'linux/amd64,linux/arm64'
+      dockerhub:
+        description: 'Also publish to Docker Hub'
+        type: boolean
+        default: true
+      moving-tags:
+        description: 'Move `latest` and `<channel>` tags to this build'
+        type: boolean
+        default: true
+
+permissions:
+  contents: 'write'
+  id-token: 'write'
+  packages: 'write'
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      app-version: ${{ steps.prepare.outputs.app-version }}
+      git-short-hash: ${{ steps.prepare.outputs.git-short-hash }}
+      dockerhub-namespace: ${{ steps.prepare.outputs.dockerhub-namespace }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve version and image namespace
+        id: prepare
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.app-version }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+          DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub && secrets.DOCKER_USER || '' }}
+        run: |
+          set -euo pipefail
+          git_short_hash=$(git rev-parse --short HEAD)
+          app_version="${INPUT_VERSION}"
+          if [ -z "${app_version}" ]; then
+            app_version="$(date '+%Y.%-m.%-d')-${BUILD_TYPE}.$(date '+%H%M')"
+          fi
+          echo "app-version=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "git-short-hash=${git_short_hash}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub-namespace=${DOCKERHUB_NAMESPACE}" >> "$GITHUB_OUTPUT"
+          echo "Publishing version ${app_version} (${git_short_hash}) as ${BUILD_TYPE}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and push
+    needs:
+      - prepare
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type }}
+      app-version: ${{ needs.prepare.outputs.app-version }}
+      git-short-hash: ${{ needs.prepare.outputs.git-short-hash }}
+      image-namespace: ${{ github.repository_owner }}
+      dockerhub-namespace: ${{ needs.prepare.outputs.dockerhub-namespace }}
+      platforms: ${{ inputs.platforms }}
+
+  tag:
+    name: Move release tags
+    needs:
+      - prepare
+      - build
+    if: ${{ inputs.moving-tags }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Login to Docker Hub
+        if: ${{ needs.prepare.outputs.dockerhub-namespace != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Retag the published image
+        shell: bash
+        env:
+          GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/affine
+          DOCKERHUB_NAMESPACE: ${{ needs.prepare.outputs.dockerhub-namespace }}
+          SOURCE_TAG: ${{ inputs.build-type }}-${{ needs.prepare.outputs.git-short-hash }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+          APP_VERSION: ${{ needs.prepare.outputs.app-version }}
+        run: |
+          set -euo pipefail
+          images=("${GHCR_IMAGE}")
+          if [ -n "${DOCKERHUB_NAMESPACE}" ]; then
+            images+=("docker.io/${DOCKERHUB_NAMESPACE}/affine")
+          fi
+          for image in "${images[@]}"; do
+            docker buildx imagetools create \
+              --tag "${image}:${BUILD_TYPE}" \
+              --tag "${image}:${APP_VERSION}" \
+              --tag "${image}:latest" \
+              "${image}:${SOURCE_TAG}"
+          done

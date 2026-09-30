@@ -1,0 +1,6 @@
+mutation listWorkspaceByokModels($input: ListWorkspaceByokModelsInput!) {
+  listWorkspaceByokModels(input: $input) {
+    modelId
+    displayName
+  }
+}

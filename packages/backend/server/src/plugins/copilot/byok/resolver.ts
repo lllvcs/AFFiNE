@@ -483,6 +483,36 @@ class CreateWorkspaceByokLocalLeaseInput {
   providers!: CreateWorkspaceByokLocalLeaseProviderInput[];
 }
 
+@ObjectType()
+class WorkspaceByokProviderModelType {
+  @Field(() => String)
+  modelId!: string;
+
+  @Field(() => String, { nullable: true })
+  displayName!: string | null;
+}
+
+@InputType()
+class ListWorkspaceByokModelsInput {
+  @Field(() => String)
+  workspaceId!: string;
+
+  @Field(() => ByokProvider)
+  provider!: ByokProvider;
+
+  @Field(() => String, { nullable: true })
+  credential!: string | null;
+
+  @Field(() => ID, { nullable: true })
+  profileId!: string | null;
+
+  @Field(() => SafeIntResolver, { nullable: true })
+  expectedRevision!: number | null;
+
+  @Field(() => WorkspaceByokEndpointInput)
+  endpoint!: WorkspaceByokEndpointInput;
+}
+
 @CopilotEnabled()
 @Resolver(() => WorkspaceType)
 export class WorkspaceByokResolver {
@@ -639,6 +669,36 @@ export class WorkspaceByokResolver {
         definition: nativeDefinition(input.definition),
       })
     );
+  }
+
+  @Mutation(() => [WorkspaceByokProviderModelType])
+  @Throttle('strict')
+  async listWorkspaceByokModels(
+    @CurrentUser() user: CurrentUser,
+    @Args('input') input: ListWorkspaceByokModelsInput
+  ) {
+    await this.assertUpdate(user.id, input.workspaceId);
+    if (input.profileId) {
+      await this.entitlement.assertServerEntitled(input.workspaceId);
+    } else {
+      await this.entitlement.assertEntitled(input.workspaceId, user.id);
+    }
+    const models = await this.runtime.listByokModelsDraft({
+      workspaceId: input.workspaceId,
+      provider: input.provider,
+      credential: input.credential ?? undefined,
+      profileId: input.profileId ?? undefined,
+      expectedRevision: input.expectedRevision ?? undefined,
+      endpoint: {
+        ...input.endpoint,
+        url: input.endpoint.url ?? undefined,
+        dialect: input.endpoint.dialect ?? undefined,
+      },
+    });
+    return models.map(model => ({
+      modelId: model.modelId,
+      displayName: model.displayName ?? null,
+    }));
   }
 
   @Mutation(() => Boolean)

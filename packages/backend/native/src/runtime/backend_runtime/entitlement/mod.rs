@@ -26,7 +26,10 @@ use super::{
   BackendRuntime, InvalidationHintV1, RuntimeError, RuntimeResult, entitlement_input_error, parse_quantity,
   parse_target_type,
 };
-use crate::{AFFINE_PRO_PUBLIC_KEY, license_import::normalize_license, runtime::Deployment};
+use crate::{
+  AFFINE_PRO_PUBLIC_KEY, entitlement::selfhosted_unlimited_limits, license_import::normalize_license,
+  runtime::Deployment,
+};
 
 pub(super) async fn load_decision_time(
   tx: &mut Transaction<'_, Postgres>,
@@ -107,7 +110,7 @@ fn resolve_grant(
       signed_payload: row.signed_payload.as_deref(),
     })
     .collect::<Vec<_>>();
-  resolve_entitlements(
+  let mut grant = resolve_entitlements(
     &AccessContext {
       deployment: match deployment {
         Deployment::Cloud => CoreDeployment::Cloud,
@@ -119,7 +122,13 @@ fn resolve_grant(
       license_public_key: AFFINE_PRO_PUBLIC_KEY,
     },
     &facts,
-  )
+  );
+  if deployment == Deployment::SelfHosted {
+    grant.limits = selfhosted_unlimited_limits();
+    grant.rights.copilot_byok = true;
+    grant.rights.unlimited_copilot = true;
+  }
+  grant
 }
 
 pub(super) async fn resolve_workspace_entitlement(

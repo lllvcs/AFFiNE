@@ -40,7 +40,7 @@ type WorkspaceByokKey = {
   credential: string;
   definition: {
     endpoint: {
-      kind: 'provider_default' | 'openai_compatible';
+      kind: 'provider_default' | 'openai_compatible' | 'anthropic_compatible';
       url?: string | null;
       dialect?: 'responses' | 'chat_completions' | null;
     };
@@ -99,12 +99,16 @@ function isValidEndpoint(value: unknown) {
   if (!isRecord(value) || typeof value.kind !== 'string') return false;
   if (value.kind === 'provider_default')
     return value.url == null && value.dialect == null;
-  if (
-    value.kind !== 'openai_compatible' ||
-    typeof value.url !== 'string' ||
-    !['responses', 'chat_completions'].includes(String(value.dialect))
-  )
+  if (value.kind === 'openai_compatible') {
+    if (!['responses', 'chat_completions'].includes(String(value.dialect))) {
+      return false;
+    }
+  } else if (value.kind === 'anthropic_compatible') {
+    if (value.dialect != null) return false;
+  } else {
     return false;
+  }
+  if (typeof value.url !== 'string') return false;
   try {
     const endpoint = new URL(value.url);
     return (
@@ -168,6 +172,14 @@ function normalizeKey(
     key.provider !== 'openai'
   ) {
     throw new Error('OpenAI-compatible endpoints require OpenAI provider.');
+  }
+  if (
+    definition?.endpoint.kind === 'anthropic_compatible' &&
+    key.provider !== 'anthropic'
+  ) {
+    throw new Error(
+      'Anthropic-compatible endpoints require Anthropic provider.'
+    );
   }
   if (!key.id || !key.name || !credential || !isValidDefinition(definition)) {
     throw new Error('Invalid BYOK key.');

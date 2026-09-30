@@ -11,9 +11,9 @@ pub use byok::{
   ByokCapabilityInput, ByokCatalogModelOutput, ByokCatalogOutput, ByokCatalogProviderOutput, ByokEndpointInput,
   ByokLocalLeaseOutput, ByokModelDeclarationInput, ByokModelProbeCheckOutput, ByokModelProbeOutput, ByokPolicyOutput,
   ByokProbeCheckInput, ByokProbeResultOutput, ByokProbeStatusOutput, ByokProfileDefinitionInput, ByokProfileOrderInput,
-  ByokProfileOutput, ByokValidationOutput, CreateByokLocalLeaseInput, CreateByokLocalLeaseProviderInput,
-  CreateByokProfileInput, ProbeByokDraftInput, ProbeByokProfileInput, ReorderByokProfilesInput,
-  ReplaceByokProfileInput, RotateByokCredentialInput, byok_catalog,
+  ByokProfileOutput, ByokProviderModelOutput, ByokValidationOutput, CreateByokLocalLeaseInput,
+  CreateByokLocalLeaseProviderInput, CreateByokProfileInput, ListByokModelsInput, ProbeByokDraftInput,
+  ProbeByokProfileInput, ReorderByokProfilesInput, ReplaceByokProfileInput, RotateByokCredentialInput, byok_catalog,
 };
 
 pub use self::core::{
@@ -34,7 +34,7 @@ pub use self::core::{
 pub fn llm_get_byok_catalog() -> ByokCatalogOutput {
   byok_catalog()
 }
-pub(crate) use byok::{ByokProfileDefinition, validate_definition};
+pub(crate) use byok::{ByokProfileDefinition, validate_definition, validate_endpoint};
 pub use contract_schema::{llm_get_contract_schema, llm_validate_contract};
 pub(crate) use ffi::{
   LlmDispatchPayload, LlmMiddlewarePayload, LlmRerankDispatchPayload, LlmStructuredDispatchPayload,

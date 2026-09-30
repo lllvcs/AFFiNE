@@ -108,6 +108,36 @@ pub struct ResolvedEntitlement {
   pub error_message: Option<String>,
 }
 
+/// Largest single blob accepted on a self-hosted instance (10 GiB).
+pub(crate) const SELFHOSTED_BLOB_LIMIT: i64 = 10 * 1024 * 1024 * 1024;
+/// Storage ceiling of a self-hosted instance. Kept at `Number.MAX_SAFE_INTEGER`
+/// so the value survives the i64 -> f64 -> GraphQL `SafeInt` trip unchanged.
+pub(crate) const SELFHOSTED_STORAGE_QUOTA: i64 = 9_007_199_254_740_991;
+pub(crate) const SELFHOSTED_SEAT_LIMIT: i32 = i32::MAX;
+/// 100 years of document history.
+pub(crate) const SELFHOSTED_HISTORY_PERIOD: i64 = 100 * 365 * 24 * 60 * 60;
+
+/// Self-hosted instances are paid for - and metered by - whoever runs them, so
+/// storage, seats and copilot usage resolve to their maximum instead of the
+/// plan catalog, and BYOK is always available.
+pub(crate) fn selfhosted_unlimited_limits() -> Limits {
+  Limits {
+    blob_limit: SELFHOSTED_BLOB_LIMIT,
+    storage_quota: SELFHOSTED_STORAGE_QUOTA,
+    seat_limit: SELFHOSTED_SEAT_LIMIT,
+    seat_quota: None,
+    history_period: SELFHOSTED_HISTORY_PERIOD,
+    copilot_action_limit: None,
+  }
+}
+
+/// Rewrites a resolved entitlement to the self-hosted unlimited contract.
+pub(crate) fn apply_selfhosted_unlimited(entitlement: &mut ResolvedEntitlement) {
+  entitlement.quota = quota(selfhosted_unlimited_limits());
+  entitlement.flags.insert("unlimitedCopilot".to_string(), true);
+  entitlement.flags.insert("copilotByok".to_string(), true);
+}
+
 #[napi]
 pub fn resolve_entitlement_v1(input: ResolveEntitlementInput) -> Result<ResolvedEntitlement> {
   let now = parse_time(&input.now)?;
@@ -127,20 +157,19 @@ pub fn resolve_entitlement_v1(input: ResolveEntitlementInput) -> Result<Resolved
     signed: input.signed_payload.is_some(),
   })
   .map_err(entitlement_input_error)?;
-  if validated == ValidatedEntitlement::SignedLicense {
-    return resolve_selfhost_license(input, now);
-  }
-  let ValidatedEntitlement::Catalog(access) = validated else {
-    unreachable!();
+  let mut resolved = if validated == ValidatedEntitlement::SignedLicense {
+    resolve_selfhost_license(input, now)?
+  } else {
+    let ValidatedEntitlement::Catalog(access) = validated else {
+      unreachable!();
+    };
+    let grant: AccessGrant = access.into();
+    active_with_grant(grant.plan, grant.quantity, grant.limits, grant.rights, None)
   };
-  let grant: AccessGrant = access.into();
-  Ok(active_with_grant(
-    grant.plan,
-    grant.quantity,
-    grant.limits,
-    grant.rights,
-    None,
-  ))
+  if deployment == Deployment::SelfHosted {
+    apply_selfhosted_unlimited(&mut resolved);
+  }
+  Ok(resolved)
 }
 
 fn parse_deployment(value: &str) -> Result<Deployment> {

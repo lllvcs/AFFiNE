@@ -347,6 +347,7 @@ enum ByokCustomEndpointMode {
 }
 
 enum ByokEndpointKind {
+  anthropic_compatible
   openai_compatible
   provider_default
 }
@@ -1426,6 +1427,15 @@ input ListUserInput {
   skip: Int = 0
 }
 
+input ListWorkspaceByokModelsInput {
+  credential: String
+  endpoint: WorkspaceByokEndpointInput!
+  expectedRevision: SafeInt
+  profileId: ID
+  provider: ByokProvider!
+  workspaceId: String!
+}
+
 input ListWorkspaceInput {
   enableAi: Boolean
   enableDocEmbedding: Boolean
@@ -1632,6 +1642,7 @@ type Mutation {
   leaveWorkspace(sendLeaveMail: Boolean @deprecated(reason: "no used anymore"), workspaceId: String!, workspaceName: String @deprecated(reason: "no longer used")): Boolean!
   linkCalDAVAccount(input: LinkCalDAVAccountInput!): CalendarAccountObjectType!
   linkCalendarAccount(input: LinkCalendarAccountInput!): String!
+  listWorkspaceByokModels(input: ListWorkspaceByokModelsInput!): [WorkspaceByokProviderModelType!]!
 
   """mention user in a doc"""
   mentionUser(input: MentionInput!): ID!
@@ -2782,6 +2793,11 @@ type WorkspaceByokProfileType {
   sortOrder: SafeInt!
   validation: WorkspaceByokValidationType
   workspaceId: String!
+}
+
+type WorkspaceByokProviderModelType {
+  displayName: String
+  modelId: String!
 }
 
 type WorkspaceByokSettingsType {

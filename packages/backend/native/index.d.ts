@@ -19,6 +19,7 @@ export declare class BackendRuntime {
   rotateByokCredential(input: RotateByokCredentialInput): Promise<ByokProfileOutput>
   probeByokProfile(input: ProbeByokProfileInput): Promise<ByokProbeResultOutput>
   probeByokDraft(input: ProbeByokDraftInput): Promise<ByokProbeResultOutput>
+  listByokModelsDraft(input: ListByokModelsInput): Promise<Array<ByokProviderModelOutput>>
   deleteByokProfile(workspaceId: string, profileId: string): Promise<boolean>
   reorderByokProfiles(input: ReorderByokProfilesInput): Promise<Array<ByokProfileOutput>>
   createByokLocalLease(input: CreateByokLocalLeaseInput): Promise<ByokLocalLeaseOutput>
@@ -403,6 +404,11 @@ export interface ByokProfileOutput {
   validation?: ByokValidationOutput
 }
 
+export interface ByokProviderModelOutput {
+  modelId: string
+  displayName?: string
+}
+
 export interface ByokValidationOutput {
   definitionFingerprint: string
   credentialGeneration: number
@@ -702,6 +708,15 @@ export declare function llmBuildImageRequestFromMessages(request: LlmImageReques
 export declare function llmBuildRerankRequest(request: LlmRerankRequestContract): LlmRerankRequestContract
 
 export declare function llmCanonicalJsonSchemaHash(schema: any): string
+
+export interface ListByokModelsInput {
+  workspaceId: string
+  provider: string
+  credential?: string
+  profileId?: string
+  expectedRevision?: number
+  endpoint: ByokEndpointInput
+}
 
 export interface LlmCoreMessage {
   role: string

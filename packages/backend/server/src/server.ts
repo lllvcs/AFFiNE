@@ -28,6 +28,13 @@ import { serverTimingAndCache } from './middleware/timing';
 
 const OneMB = 1024 * 1024;
 
+/**
+ * Self-hosted instances accept blobs up to `SELFHOSTED_BLOB_LIMIT` (see
+ * `packages/backend/native/src/entitlement.rs`), far above the cloud plan
+ * ceiling this upload parser was originally sized for.
+ */
+const SELF_HOSTED_MAX_FILE_SIZE = 10 * 1024 * OneMB;
+
 export function configureBodyParsers(
   app: NestExpressApplication,
   serverPath: string
@@ -117,7 +124,7 @@ export async function run() {
 
   app.use(
     graphqlUploadExpress({
-      maxFileSize: 100 * OneMB,
+      maxFileSize: env.selfhosted ? SELF_HOSTED_MAX_FILE_SIZE : 100 * OneMB,
       maxFiles: 32,
     })
   );

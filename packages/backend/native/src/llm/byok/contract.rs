@@ -127,6 +127,26 @@ pub struct ProbeByokDraftInput {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[napi_derive::napi(object)]
+pub struct ListByokModelsInput {
+  pub workspace_id: String,
+  pub provider: String,
+  pub credential: Option<String>,
+  pub profile_id: Option<String>,
+  pub expected_revision: Option<i32>,
+  pub endpoint: ByokEndpointInput,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[napi_derive::napi(object)]
+pub struct ByokProviderModelOutput {
+  pub model_id: String,
+  pub display_name: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[napi_derive::napi(object)]
 pub struct ByokProbeCheckInput {
   pub model_id: String,
   pub operation: String,
@@ -225,6 +245,7 @@ pub struct ByokProbeResultOutput {
 pub(crate) enum ByokEndpoint {
   ProviderDefault,
   OpenAiCompatible { url: String, dialect: OpenAiDialect },
+  AnthropicCompatible { url: String },
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -262,8 +283,35 @@ impl ByokProfileDefinition {
   pub(crate) fn endpoint_identity(&self) -> &str {
     match &self.endpoint {
       ByokEndpoint::ProviderDefault => "default",
-      ByokEndpoint::OpenAiCompatible { url, .. } => url,
+      ByokEndpoint::OpenAiCompatible { url, .. } | ByokEndpoint::AnthropicCompatible { url } => url,
     }
+  }
+}
+
+/// Validates the endpoint half of a definition. Model listing only needs this
+/// half, so it is shared with [`validate_definition`].
+pub(crate) fn validate_endpoint(provider: &str, input: ByokEndpointInput) -> Result<ByokEndpoint, ByokContractError> {
+  if !matches!(provider, "openai" | "anthropic" | "gemini" | "fal") {
+    return Err(ByokContractError::Provider);
+  }
+  match (input.kind.as_str(), input.url, input.dialect.as_deref()) {
+    ("provider_default", None, None) => Ok(ByokEndpoint::ProviderDefault),
+    ("openai_compatible", Some(url), Some(dialect)) if provider == "openai" && !url.trim().is_empty() => {
+      Ok(ByokEndpoint::OpenAiCompatible {
+        url: canonicalize_endpoint(&url).map_err(|_| ByokContractError::Endpoint)?,
+        dialect: match dialect {
+          "responses" => OpenAiDialect::Responses,
+          "chat_completions" => OpenAiDialect::ChatCompletions,
+          _ => return Err(ByokContractError::Endpoint),
+        },
+      })
+    }
+    ("anthropic_compatible", Some(url), None) if provider == "anthropic" && !url.trim().is_empty() => {
+      Ok(ByokEndpoint::AnthropicCompatible {
+        url: canonicalize_endpoint(&url).map_err(|_| ByokContractError::Endpoint)?,
+      })
+    }
+    _ => Err(ByokContractError::Endpoint),
   }
 }
 
@@ -271,27 +319,7 @@ pub(crate) fn validate_definition(
   provider: &str,
   input: ByokProfileDefinitionInput,
 ) -> Result<ByokProfileDefinition, ByokContractError> {
-  if !matches!(provider, "openai" | "anthropic" | "gemini" | "fal") {
-    return Err(ByokContractError::Provider);
-  }
-  let endpoint = match (
-    input.endpoint.kind.as_str(),
-    input.endpoint.url,
-    input.endpoint.dialect.as_deref(),
-  ) {
-    ("provider_default", None, None) => ByokEndpoint::ProviderDefault,
-    ("openai_compatible", Some(url), Some(dialect)) if provider == "openai" && !url.trim().is_empty() => {
-      ByokEndpoint::OpenAiCompatible {
-        url: canonicalize_endpoint(&url).map_err(|_| ByokContractError::Endpoint)?,
-        dialect: match dialect {
-          "responses" => OpenAiDialect::Responses,
-          "chat_completions" => OpenAiDialect::ChatCompletions,
-          _ => return Err(ByokContractError::Endpoint),
-        },
-      }
-    }
-    _ => return Err(ByokContractError::Endpoint),
-  };
+  let endpoint = validate_endpoint(provider, input.endpoint)?;
   if input.models.is_empty() {
     return Err(ByokContractError::Required("models"));
   }
@@ -391,7 +419,10 @@ fn validate_upper_bound(
   {
     return Err(ByokContractError::CapabilityUpperBound);
   }
-  if matches!(endpoint, ByokEndpoint::OpenAiCompatible { .. }) {
+  if matches!(
+    endpoint,
+    ByokEndpoint::OpenAiCompatible { .. } | ByokEndpoint::AnthropicCompatible { .. }
+  ) {
     return Ok(());
   }
 
@@ -459,6 +490,11 @@ impl From<ByokProfileDefinition> for ByokProfileDefinitionInput {
             }
             .to_string(),
           ),
+        },
+        ByokEndpoint::AnthropicCompatible { url } => ByokEndpointInput {
+          kind: "anthropic_compatible".to_string(),
+          url: Some(url),
+          dialect: None,
         },
       },
       models: definition

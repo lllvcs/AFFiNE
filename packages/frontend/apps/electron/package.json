@@ -11,7 +11,15 @@
   "description": "AFFiNE Desktop App",
   "homepage": "https://github.com/toeverything/AFFiNE",
   "exports": {
+    "./helper/*": [
+      "./src/helper/*.ts",
+      "./src/helper/*/index.ts"
+    ],
     "./helper/exposed": "./src/helper/exposed.ts",
+    "./main/*": [
+      "./src/main/*.ts",
+      "./src/main/*/index.ts"
+    ],
     "./main/exposed": "./src/main/exposed.ts",
     "./preload/electron-api": "./src/preload/electron-api.ts",
     "./preload/shared-storage": "./src/preload/shared-storage.ts",

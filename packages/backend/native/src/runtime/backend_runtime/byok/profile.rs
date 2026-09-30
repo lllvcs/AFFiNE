@@ -5,10 +5,11 @@ use uuid::Uuid;
 
 use super::{RuntimeError, RuntimeResult};
 use crate::llm::{
-  ByokProfileDefinition, ByokProfileOutput, ByokValidationOutput, CreateByokProfileInput, ProbeByokDraftInput,
-  ProbeByokProfileInput, ReorderByokProfilesInput, ReplaceByokProfileInput, RotateByokCredentialInput,
+  ByokProfileDefinition, ByokProfileOutput, ByokProviderModelOutput, ByokValidationOutput, CreateByokProfileInput,
+  ListByokModelsInput, ProbeByokDraftInput, ProbeByokProfileInput, ReorderByokProfilesInput, ReplaceByokProfileInput,
+  RotateByokCredentialInput,
   byok::{ByokPolicy, CredentialEnvelopeKey, SensitiveCredential, reconcile_validation, server_aad},
-  validate_definition,
+  validate_definition, validate_endpoint,
 };
 
 #[derive(FromRow)]
@@ -466,10 +467,35 @@ pub(in super::super) async fn probe_draft(
   let definition = validate_definition(&input.provider, input.definition)
     .map_err(|error| RuntimeError::invalid_input(error.to_string()))?;
   policy.admit(&input.provider, &definition.endpoint).await?;
-  let credential = match (input.credential, input.profile_id, input.expected_revision) {
+  let credential = resolve_draft_credential(
+    pool,
+    root_secret,
+    &input.provider,
+    &input.workspace_id,
+    input.credential,
+    input.profile_id,
+    input.expected_revision,
+  )
+  .await?;
+  super::probe::execute_probe(&input.provider, &definition, credential, policy, input.checks).await
+}
+
+/// Resolves the credential a draft interaction (probe, model listing) should
+/// use: either the one supplied with the request, or - when editing a saved
+/// profile - the decrypted one it was stored with.
+pub(super) async fn resolve_draft_credential(
+  pool: &PgPool,
+  root_secret: &[u8],
+  provider: &str,
+  workspace_id: &str,
+  credential: Option<String>,
+  profile_id: Option<String>,
+  expected_revision: Option<i32>,
+) -> RuntimeResult<SensitiveCredential> {
+  match (credential, profile_id, expected_revision) {
     (Some(credential), None, None) => {
       require_text(&credential, "credential")?;
-      SensitiveCredential::new(credential.into_bytes())
+      Ok(SensitiveCredential::new(credential.into_bytes()))
     }
     (None, Some(profile_id), Some(expected_revision)) => {
       let profile = sqlx::query_as::<_, ProfileRow>(
@@ -480,13 +506,13 @@ pub(in super::super) async fn probe_draft(
         WHERE workspace_id = $1 AND id = $2
         "#,
       )
-      .bind(&input.workspace_id)
+      .bind(workspace_id)
       .bind(&profile_id)
       .fetch_optional(pool)
       .await
-      .map_err(|error| RuntimeError::database("read BYOK profile for draft probe failed", error))?
+      .map_err(|error| RuntimeError::database("read BYOK profile for draft credential failed", error))?
       .ok_or_else(|| RuntimeError::invalid_input("BYOK profile not found"))?;
-      if profile.provider != input.provider || profile.revision != expected_revision {
+      if profile.provider != provider || profile.revision != expected_revision {
         return Err(RuntimeError::invalid_input("byok_revision_conflict"));
       }
       let stored_definition = parse_definition(profile.definition)?;
@@ -500,15 +526,37 @@ pub(in super::super) async fn probe_draft(
             stored_definition.endpoint_identity(),
           ),
         )
-        .map_err(|_| RuntimeError::invalid_state("credential_unavailable"))?
+        .map_err(|_| RuntimeError::invalid_state("credential_unavailable"))
     }
-    _ => {
-      return Err(RuntimeError::invalid_input(
-        "draft probe requires either credential or stored profile revision",
-      ));
-    }
-  };
-  super::probe::execute_probe(&input.provider, &definition, credential, policy, input.checks).await
+    _ => Err(RuntimeError::invalid_input(
+      "draft interaction requires either credential or stored profile revision",
+    )),
+  }
+}
+
+/// Lists the model ids the configured endpoint reports for the draft
+/// credential, so the BYOK editor can offer real choices.
+pub(in super::super) async fn list_provider_models_draft(
+  pool: &PgPool,
+  root_secret: &[u8],
+  policy: &ByokPolicy,
+  input: ListByokModelsInput,
+) -> RuntimeResult<Vec<ByokProviderModelOutput>> {
+  let endpoint = validate_endpoint(&input.provider, input.endpoint)
+    .map_err(|error| RuntimeError::invalid_input(error.to_string()))?;
+  let credential = resolve_draft_credential(
+    pool,
+    root_secret,
+    &input.provider,
+    &input.workspace_id,
+    input.credential,
+    input.profile_id,
+    input.expected_revision,
+  )
+  .await?;
+  let credential = String::from_utf8(credential.expose().to_vec())
+    .map_err(|_| RuntimeError::invalid_state("credential_unavailable"))?;
+  super::list::list_provider_models(&input.provider, &endpoint, credential, policy).await
 }
 
 async fn select_profile_for_update(

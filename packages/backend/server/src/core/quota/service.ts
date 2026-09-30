@@ -11,7 +11,7 @@ import {
   WorkspaceQuotaHumanReadableType,
   WorkspaceQuotaType,
 } from './types';
-import { formatDate, formatSize } from './utils';
+import { formatDate, formatMemberLimit, formatSize } from './utils';
 
 type UserQuotaWithUsage = Omit<UserQuotaType, 'humanReadable'>;
 type WorkspaceQuota = Omit<BaseWorkspaceQuota, 'seatQuota'> & {
@@ -79,7 +79,7 @@ export class QuotaService {
       storageQuota: formatSize(quota.storageQuota),
       usedStorageQuota: formatSize(quota.usedStorageQuota),
       historyPeriod: formatDate(quota.historyPeriod),
-      memberLimit: quota.memberLimit.toString(),
+      memberLimit: formatMemberLimit(quota.memberLimit),
       copilotActionLimit: quota.copilotActionLimit
         ? `${quota.copilotActionLimit} times`
         : 'Unlimited',
@@ -104,7 +104,7 @@ export class QuotaService {
       storageQuota: formatSize(quota.storageQuota),
       storageQuotaUsed: formatSize(quota.usedStorageQuota),
       historyPeriod: formatDate(quota.historyPeriod),
-      memberLimit: quota.memberLimit.toString(),
+      memberLimit: formatMemberLimit(quota.memberLimit),
       memberCount: quota.memberCount.toString(),
       overcapacityMemberCount: quota.overcapacityMemberCount.toString(),
     };

@@ -27,8 +27,12 @@ impl Default for CopilotByokRuntimeConfig {
     Self {
       enabled: true,
       allowed_providers: default_allowed_providers(),
-      allow_custom_endpoint: false,
-      allow_private_endpoint: false,
+      // Self-hosted operators run their own gateways (Ollama, vLLM, one-api,
+      // ...), so a private base URL is the common case rather than the
+      // exception. Cloud ignores both flags: custom endpoints stay
+      // `Unavailable` there regardless.
+      allow_custom_endpoint: true,
+      allow_private_endpoint: true,
     }
   }
 }

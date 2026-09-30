@@ -137,10 +137,12 @@ fn dispatch_check(
     operation: operation_kind,
     endpoint: match endpoint {
       ByokEndpoint::ProviderDefault => BackendEndpoint::ProviderDefault,
-      ByokEndpoint::OpenAiCompatible { url, .. } => BackendEndpoint::Custom(url.clone()),
+      ByokEndpoint::OpenAiCompatible { url, .. } | ByokEndpoint::AnthropicCompatible { url } => {
+        BackendEndpoint::Custom(url.clone())
+      }
     },
     openai_dialect: match endpoint {
-      ByokEndpoint::ProviderDefault => None,
+      ByokEndpoint::ProviderDefault | ByokEndpoint::AnthropicCompatible { .. } => None,
       ByokEndpoint::OpenAiCompatible { dialect, .. } => Some(*dialect),
     },
     model: model_id.to_string(),

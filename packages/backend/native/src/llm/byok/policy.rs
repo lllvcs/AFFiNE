@@ -73,8 +73,9 @@ impl ByokPolicy {
     if !self.allows(provider, endpoint) {
       return Err(RuntimeError::invalid_input("BYOK target is unavailable"));
     }
-    let ByokEndpoint::OpenAiCompatible { url, .. } = endpoint else {
-      return Ok(());
+    let url = match endpoint {
+      ByokEndpoint::ProviderDefault => return Ok(()),
+      ByokEndpoint::OpenAiCompatible { url, .. } | ByokEndpoint::AnthropicCompatible { url } => url,
     };
     if self.allow_private_endpoint {
       return Ok(());
@@ -112,11 +113,19 @@ impl ByokPolicy {
         ByokEndpoint::OpenAiCompatible { .. } => {
           provider == "openai" && self.custom_endpoint_mode == ByokCustomEndpointMode::Enabled
         }
+        ByokEndpoint::AnthropicCompatible { .. } => {
+          provider == "anthropic" && self.custom_endpoint_mode == ByokCustomEndpointMode::Enabled
+        }
       }
   }
 
   pub(crate) fn egress_policy(&self, endpoint: &ByokEndpoint) -> EgressPolicy {
-    if self.allow_private_endpoint && matches!(endpoint, ByokEndpoint::OpenAiCompatible { .. }) {
+    if self.allow_private_endpoint
+      && matches!(
+        endpoint,
+        ByokEndpoint::OpenAiCompatible { .. } | ByokEndpoint::AnthropicCompatible { .. }
+      )
+    {
       EgressPolicy::AllowPrivate
     } else {
       EgressPolicy::PublicOnly

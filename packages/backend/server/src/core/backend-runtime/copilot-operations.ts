@@ -3,10 +3,12 @@ import type {
   ByokPolicyOutput,
   ByokProbeResultOutput,
   ByokProfileOutput,
+  ByokProviderModelOutput,
   CopilotExecuteInput,
   CopilotRouteCheckInput,
   CreateByokLocalLeaseInput,
   CreateByokProfileInput,
+  ListByokModelsInput,
   ProbeByokDraftInput,
   ProbeByokProfileInput,
   ReorderByokProfilesInput,
@@ -88,6 +90,14 @@ export class BackendRuntimeOperations extends BackendRuntimeSearchOperations {
   ): Promise<ByokLocalLeaseOutput> {
     return await this.measured('createByokLocalLease', runtime =>
       runtime.createByokLocalLease(input)
+    );
+  }
+
+  async listByokModelsDraft(
+    input: ListByokModelsInput
+  ): Promise<ByokProviderModelOutput[]> {
+    return await this.measured('listByokModelsDraft', runtime =>
+      runtime.listByokModelsDraft(input)
     );
   }
 

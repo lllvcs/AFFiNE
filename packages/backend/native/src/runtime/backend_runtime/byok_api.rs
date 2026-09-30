@@ -68,6 +68,15 @@ impl BackendRuntime {
   }
 
   #[napi]
+  pub async fn list_byok_models_draft(&self, input: ListByokModelsInput) -> Result<Vec<ByokProviderModelOutput>> {
+    let config = self.config()?;
+    let policy = config.byok_policy();
+    byok::list_provider_models_draft(&self.pool().await?, config.private_key.as_bytes(), &policy, input)
+      .await
+      .map_err(to_napi_error)
+  }
+
+  #[napi]
   pub async fn delete_byok_profile(&self, workspace_id: String, profile_id: String) -> Result<bool> {
     let deleted = byok::delete(&self.pool().await?, &workspace_id, &profile_id)
       .await

@@ -228,3 +228,19 @@ export function defaultModels(settings: ByokSettings, provider: ByokProvider) {
     capabilities: model.capabilities,
   }));
 }
+
+/**
+ * Declarations for model ids discovered from the provider's own model list.
+ * Capabilities are a starting point only: the connection probe trims whatever
+ * the endpoint turns out not to support.
+ */
+export function declarationsFromModelIds(
+  modelIds: string[],
+  useCases: UseCase[] = ['chat']
+): ModelDeclaration[] {
+  return modelIds.map(modelId => ({
+    modelId: modelId.trim(),
+    enabled: true,
+    capabilities: useCases.map(capabilityForUseCase),
+  }));
+}

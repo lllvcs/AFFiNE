@@ -2828,6 +2828,17 @@ export const createWorkspaceByokLocalLeaseMutation = {
 }`,
 };
 
+export const listWorkspaceByokModelsMutation = {
+  id: 'listWorkspaceByokModelsMutation' as const,
+  op: 'listWorkspaceByokModels',
+  query: `mutation listWorkspaceByokModels($input: ListWorkspaceByokModelsInput!) {
+  listWorkspaceByokModels(input: $input) {
+    modelId
+    displayName
+  }
+}`,
+};
+
 export const reorderWorkspaceByokProfilesMutation = {
   id: 'reorderWorkspaceByokProfilesMutation' as const,
   op: 'reorderWorkspaceByokProfiles',

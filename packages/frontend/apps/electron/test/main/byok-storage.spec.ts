@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
+import type { IpcMainInvokeEvent } from 'electron';
 import fs from 'fs-extra';
 import {
   afterEach,
@@ -21,6 +22,9 @@ const electronMock = vi.hoisted(() => ({
 }));
 
 let disposeWorkspaceByokStorage: (() => void) | undefined;
+
+// The handlers never touch the IPC event, so tests hand them a stand-in.
+const ipcEvent = undefined as unknown as IpcMainInvokeEvent;
 
 vi.mock('electron', () => ({
   app: {
@@ -76,7 +80,7 @@ afterEach(async () => {
 
 describe('byok storage handlers', () => {
   const definition = {
-    endpoint: { kind: 'provider_default' },
+    endpoint: { kind: 'provider_default' as const },
     models: [
       {
         modelId: 'model-1',
@@ -97,7 +101,6 @@ describe('byok storage handlers', () => {
     const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
       await import('@affine/electron/main/byok-storage/handlers');
     disposeWorkspaceByokStorage = dispose;
-    const ipcEvent = undefined;
 
     await byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
       id: 'local-openai',
@@ -154,7 +157,6 @@ describe('byok storage handlers', () => {
     const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
       await import('@affine/electron/main/byok-storage/handlers');
     disposeWorkspaceByokStorage = dispose;
-    const ipcEvent = undefined;
 
     await expect(byokStorageHandlers.isSupported()).resolves.toBe(false);
     await expect(
@@ -215,7 +217,7 @@ describe('byok storage handlers', () => {
     disposeWorkspaceByokStorage = dispose;
 
     await expect(
-      byokStorageHandlers.upsertWorkspaceKey(undefined, 'workspace-1', {
+      byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
         id: 'local-openai',
         provider: 'openai',
         name: 'OpenAI',
@@ -230,7 +232,6 @@ describe('byok storage handlers', () => {
     const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
       await import('@affine/electron/main/byok-storage/handlers');
     disposeWorkspaceByokStorage = dispose;
-    const ipcEvent = undefined;
 
     await byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
       id: 'local-openai',
@@ -310,5 +311,89 @@ describe('byok storage handlers', () => {
       sortOrder: 4,
       enabled: true,
     });
+  });
+
+  test('stores anthropic-compatible endpoints for anthropic keys', async () => {
+    const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
+      await import('@affine/electron/main/byok-storage/handlers');
+    disposeWorkspaceByokStorage = dispose;
+
+    await byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
+      id: 'local-anthropic',
+      provider: 'anthropic',
+      name: 'Anthropic gateway',
+      credential: 'sk-ant',
+      definition: {
+        ...definition,
+        endpoint: {
+          kind: 'anthropic_compatible',
+          url: 'https://api.anthropic.example',
+        },
+      },
+    });
+
+    const [publicKey] = await byokStorageHandlers.listWorkspaceKeys(
+      ipcEvent,
+      'workspace-1'
+    );
+    expect(publicKey).toMatchObject({
+      id: 'local-anthropic',
+      provider: 'anthropic',
+      definition: {
+        ...definition,
+        endpoint: {
+          kind: 'anthropic_compatible',
+          url: 'https://api.anthropic.example',
+        },
+      },
+    });
+  });
+
+  test('rejects an anthropic-compatible endpoint that carries a dialect', async () => {
+    const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
+      await import('@affine/electron/main/byok-storage/handlers');
+    disposeWorkspaceByokStorage = dispose;
+
+    await expect(
+      byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
+        id: 'local-anthropic',
+        provider: 'anthropic',
+        name: 'Anthropic gateway',
+        credential: 'sk-ant',
+        definition: {
+          ...definition,
+          endpoint: {
+            kind: 'anthropic_compatible',
+            url: 'https://api.anthropic.example',
+            dialect: 'responses',
+          },
+        },
+      })
+    ).rejects.toThrow('Invalid BYOK key.');
+    expect(electronMock.encryptString).not.toHaveBeenCalled();
+  });
+
+  test('rejects endpoints whose kind does not match the provider', async () => {
+    const { byokStorageHandlers, disposeWorkspaceByokStorage: dispose } =
+      await import('@affine/electron/main/byok-storage/handlers');
+    disposeWorkspaceByokStorage = dispose;
+
+    await expect(
+      byokStorageHandlers.upsertWorkspaceKey(ipcEvent, 'workspace-1', {
+        id: 'local-openai',
+        provider: 'openai',
+        name: 'OpenAI',
+        credential: 'sk-openai',
+        definition: {
+          ...definition,
+          endpoint: {
+            kind: 'anthropic_compatible',
+            url: 'https://api.anthropic.example',
+          },
+        },
+      })
+    ).rejects.toThrow(
+      'Anthropic-compatible endpoints require Anthropic provider.'
+    );
   });
 });

@@ -7,16 +7,23 @@ import { byokT } from './metadata';
 import {
   capabilitiesForUseCases,
   type catalogModels,
+  declarationsFromModelIds,
   type ModelDeclaration,
   modelUseCases,
   type UseCase,
   useCases,
 } from './model-utils';
 
+const NO_DISCOVERED_MODELS: {
+  modelId: string;
+  displayName: string | null;
+}[] = [];
+
 export const ModelEditorModal = ({
   open,
   customEndpoint,
   catalog,
+  discovered = NO_DISCOVERED_MODELS,
   models,
   editingModel,
   onOpenChange,
@@ -25,6 +32,7 @@ export const ModelEditorModal = ({
   open: boolean;
   customEndpoint: boolean;
   catalog: ReturnType<typeof catalogModels>;
+  discovered?: { modelId: string; displayName: string | null }[];
   models: ModelDeclaration[];
   editingModel: ModelDeclaration | null;
   onOpenChange: (open: boolean) => void;
@@ -61,15 +69,38 @@ export const ModelEditorModal = ({
     );
   }, [availableCatalog, search]);
 
+  // Models reported by the provider itself take the place of the free-text id
+  // field, but only when adding: an existing declaration is always edited
+  // as-is.
+  const availableDiscovered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return discovered
+      .filter(item => !models.some(model => model.modelId === item.modelId))
+      .filter(
+        item =>
+          !query ||
+          item.modelId.toLocaleLowerCase().includes(query) ||
+          (item.displayName ?? '').toLocaleLowerCase().includes(query)
+      );
+  }, [discovered, models, search]);
+  const listMode = customEndpoint && !editingModel && discovered.length > 0;
+
   const submit = () => {
     if (customEndpoint) {
-      onSubmit([
-        {
-          modelId: modelId.trim(),
-          enabled: editingModel?.enabled ?? true,
-          capabilities: capabilitiesForUseCases(editingModel, selectedUseCases),
-        },
-      ]);
+      onSubmit(
+        listMode
+          ? declarationsFromModelIds(selectedIds, selectedUseCases)
+          : [
+              {
+                modelId: modelId.trim(),
+                enabled: editingModel?.enabled ?? true,
+                capabilities: capabilitiesForUseCases(
+                  editingModel,
+                  selectedUseCases
+                ),
+              },
+            ]
+      );
     } else {
       onSubmit(
         selectedIds.flatMap(id => {
@@ -93,9 +124,11 @@ export const ModelEditorModal = ({
   const duplicateModelId = models.some(
     model => model !== editingModel && model.modelId === normalizedModelId
   );
-  const valid = customEndpoint
-    ? !!normalizedModelId && !duplicateModelId && selectedUseCases.length > 0
-    : selectedIds.length > 0;
+  const valid = listMode
+    ? selectedIds.length > 0 && selectedUseCases.length > 0
+    : customEndpoint
+      ? !!normalizedModelId && !duplicateModelId && selectedUseCases.length > 0
+      : selectedIds.length > 0;
 
   return (
     <Modal
@@ -120,22 +153,79 @@ export const ModelEditorModal = ({
     >
       {customEndpoint ? (
         <div className={styles.modelModalBody}>
-          <label className={styles.field}>
-            <span className={styles.modelFieldLabel}>
-              {byokT(t, 'field.model-id')}
-            </span>
-            <Input
-              size="large"
-              value={modelId}
-              onChange={setModelId}
-              placeholder={byokT(t, 'placeholder.model-id')}
-            />
-            {duplicateModelId ? (
-              <span className={styles.error}>
-                {byokT(t, 'model.duplicate-id')}
+          {listMode ? (
+            <>
+              {availableDiscovered.length > 6 ? (
+                <Input
+                  className={styles.modelSearch}
+                  size="large"
+                  value={search}
+                  onChange={setSearch}
+                  placeholder={byokT(t, 'placeholder.search-models')}
+                />
+              ) : null}
+              <div className={styles.catalogChoices}>
+                {availableDiscovered.length ? (
+                  availableDiscovered.map(model => (
+                    <label
+                      className={styles.catalogChoice}
+                      data-selected={selectedIds.includes(model.modelId)}
+                      key={model.modelId}
+                    >
+                      <Checkbox
+                        className={styles.modelCheckbox}
+                        aria-label={model.displayName ?? model.modelId}
+                        checked={selectedIds.includes(model.modelId)}
+                        onChange={(_, checked) =>
+                          setSelectedIds(
+                            checked
+                              ? [...selectedIds, model.modelId]
+                              : selectedIds.filter(id => id !== model.modelId)
+                          )
+                        }
+                      />
+                      <span className={styles.catalogModelCopy}>
+                        <span className={styles.catalogModelTitle}>
+                          <strong>{model.displayName ?? model.modelId}</strong>
+                        </span>
+                        {model.displayName ? (
+                          <span className={styles.catalogModelMeta}>
+                            {model.modelId}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  ))
+                ) : (
+                  <div className={styles.modelEmpty}>
+                    {byokT(
+                      t,
+                      search
+                        ? 'models.no-search-results'
+                        : 'models.discovered-all-added'
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <label className={styles.field}>
+              <span className={styles.modelFieldLabel}>
+                {byokT(t, 'field.model-id')}
               </span>
-            ) : null}
-          </label>
+              <Input
+                size="large"
+                value={modelId}
+                onChange={setModelId}
+                placeholder={byokT(t, 'placeholder.model-id')}
+              />
+              {duplicateModelId ? (
+                <span className={styles.error}>
+                  {byokT(t, 'model.duplicate-id')}
+                </span>
+              ) : null}
+            </label>
+          )}
           <fieldset className={styles.modelCapabilities}>
             <legend className={styles.modelFieldLabel}>
               {byokT(t, 'model.use-this-for')}
@@ -244,7 +334,7 @@ export const ModelEditorModal = ({
             t,
             editingModel
               ? 'action.save-model'
-              : customEndpoint
+              : customEndpoint && !listMode
                 ? 'action.add-model'
                 : 'action.add-selected-models',
             { count: selectedIds.length }

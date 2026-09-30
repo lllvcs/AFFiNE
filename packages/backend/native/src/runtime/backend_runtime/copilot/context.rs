@@ -273,6 +273,7 @@ fn authorized_byok_profile(
   let (endpoint, openai_dialect) = match definition.endpoint {
     ByokEndpoint::ProviderDefault => (BackendEndpoint::ProviderDefault, None),
     ByokEndpoint::OpenAiCompatible { url, dialect } => (BackendEndpoint::Custom(url), Some(dialect)),
+    ByokEndpoint::AnthropicCompatible { url } => (BackendEndpoint::Custom(url), None),
   };
   AuthorizedProviderProfile {
     profile_id,

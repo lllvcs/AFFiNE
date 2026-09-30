@@ -482,6 +482,18 @@
       }
     },
     {
+      "files": ["packages/frontend/apps/electron/**/*.{ts,tsx}"],
+      "rules": {
+        "import-x-js/no-extraneous-dependencies": [
+          "error",
+          {
+            "includeInternal": true,
+            "whitelist": ["@affine/electron"]
+          }
+        ]
+      }
+    },
+    {
       "files": [
         "packages/frontend/apps/electron/scripts/**/*",
         "tests/blocksuite/**/*.{ts,tsx}",

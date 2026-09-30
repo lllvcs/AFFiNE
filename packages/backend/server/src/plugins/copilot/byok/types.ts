@@ -29,6 +29,7 @@ export enum ByokProviderSource {
 export enum ByokEndpointKind {
   provider_default = 'provider_default',
   openai_compatible = 'openai_compatible',
+  anthropic_compatible = 'anthropic_compatible',
 }
 
 export enum ByokOpenAiDialect {
