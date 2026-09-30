@@ -1,0 +1,86 @@
+name: Build Docker Image
+
+# Manual-only build step. Compiles everything (Rust native targets, server
+# bundle, web/admin/mobile bundles) and pushes the resulting image to GHCR under
+# an immutable `<channel>-<short-hash>` tag:
+#
+#   ghcr.io/<owner>/affine:<channel>-<short-hash>
+#
+# That image is the hand-off artifact: run "Publish Docker Image" to copy it to
+# Docker Hub and move the release tags, without rebuilding anything.
+#
+# Requires no registry secrets beyond GITHUB_TOKEN; GH_TOKEN is used when
+# present (for example to flip the GHCR package to public).
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: 'Release channel'
+        type: choice
+        options:
+          - canary
+          - beta
+          - stable
+        default: canary
+      app-version:
+        description: 'Version (optional, e.g. 0.26.0). Defaults to <date>-<channel>.<HHMM>'
+        type: string
+        required: false
+      include-admin:
+        description: 'Include the admin panel bundle'
+        type: boolean
+        default: true
+      include-mobile:
+        description: 'Include the mobile web bundle'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      app-version: ${{ steps.prepare.outputs.app-version }}
+      git-short-hash: ${{ steps.prepare.outputs.git-short-hash }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve version
+        id: prepare
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.app-version }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+        run: |
+          set -euo pipefail
+          git_short_hash=$(git rev-parse --short HEAD)
+          app_version="${INPUT_VERSION}"
+          if [ -z "${app_version}" ]; then
+            app_version="$(date '+%Y.%-m.%-d')-${BUILD_TYPE}.$(date '+%H%M')"
+          fi
+          echo "app-version=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "git-short-hash=${git_short_hash}" >> "$GITHUB_OUTPUT"
+          {
+            echo "Building \`${app_version}\` (\`${git_short_hash}\`) as \`${BUILD_TYPE}\`"
+            echo ""
+            echo "- admin bundle: \`${{ inputs.include-admin }}\`"
+            echo "- mobile bundle: \`${{ inputs.include-mobile }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and store image
+    needs:
+      - prepare
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type }}
+      app-version: ${{ needs.prepare.outputs.app-version }}
+      git-short-hash: ${{ needs.prepare.outputs.git-short-hash }}
+      image-namespace: ${{ github.repository_owner }}
+      build-admin: ${{ inputs.include-admin }}
+      build-mobile: ${{ inputs.include-mobile }}

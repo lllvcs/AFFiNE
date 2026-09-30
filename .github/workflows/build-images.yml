@@ -12,15 +12,12 @@ on:
       git-short-hash:
         type: string
         required: true
-      # Optional publishing targets. Empty values keep the upstream behaviour:
-      # the image is pushed to `ghcr.io/<repository owner>/affine` only.
+      # The built image is pushed to GHCR only: it is the hand-off artifact the
+      # publish workflow copies to the final registries and tags. Pushing here
+      # keeps the transfer registry-to-registry instead of shipping a
+      # multi-gigabyte image archive through the workflow artifacts.
       image-namespace:
         description: 'GHCR namespace. Defaults to the repository owner.'
-        type: string
-        required: false
-        default: ''
-      dockerhub-namespace:
-        description: 'Docker Hub namespace. Pushes to Docker Hub when set.'
         type: string
         required: false
         default: ''
@@ -40,10 +37,6 @@ on:
         required: false
         default: true
     secrets:
-      DOCKER_USER:
-        required: false
-      DOCKER_PASSWORD:
-        required: false
       GH_TOKEN:
         required: false
       R2_ACCOUNT_ID:
@@ -271,14 +264,6 @@ jobs:
           logout: false
           username: ${{ github.actor }}
           password: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Login to Docker Hub
-        if: ${{ inputs.dockerhub-namespace != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          logout: false
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -341,26 +326,43 @@ jobs:
         id: tags
         env:
           IMAGE_NAMESPACE: ${{ inputs.image-namespace || github.repository_owner }}
-          DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub-namespace }}
           TAG_SUFFIX: ${{ inputs.build-type }}-${{ inputs.git-short-hash }}
+          APP_VERSION: ${{ inputs.app-version }}
+          BUILD_TYPE: ${{ inputs.build-type }}
         run: |
           set -euo pipefail
           tags="ghcr.io/${IMAGE_NAMESPACE}/affine:${TAG_SUFFIX}"
-          if [ -n "${DOCKERHUB_NAMESPACE}" ]; then
-            tags="${tags}"$'\n'"docker.io/${DOCKERHUB_NAMESPACE}/affine:${TAG_SUFFIX}"
-          fi
           {
             echo "tags<<EOF"
             echo "${tags}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          mkdir -p ./image-meta
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync(
+              "./image-meta/image-meta.json",
+              JSON.stringify(
+                {
+                  tag: process.env.TAG_SUFFIX,
+                  buildType: process.env.BUILD_TYPE,
+                  version: process.env.APP_VERSION,
+                  image: `ghcr.io/${process.env.IMAGE_NAMESPACE}/affine`,
+                },
+                null,
+                2
+              ) + "\n"
+            );
+          '
           {
             echo ""
-            echo "### Pushed images"
+            echo "### Built image"
             echo ""
             echo '```'
             echo "${tags}"
             echo '```'
+            echo ""
+            echo "Next: run the **Publish Docker Image** workflow to copy it to Docker Hub and move the release tags."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build backend Dockerfile
@@ -394,3 +396,13 @@ jobs:
             fi
           done
           echo "::warning::Could not change the GHCR package visibility automatically (the token needs the packages write scope). Set it by hand: https://github.com/users/${IMAGE_NAMESPACE}/packages/container/affine/settings → Change visibility → Public."
+
+      - name: Upload image metadata
+        # Small hand-off file: the publish workflow reads it to learn which tag
+        # the most recent build produced.
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-meta
+          path: ./image-meta
+          if-no-files-found: error
+          retention-days: 30
