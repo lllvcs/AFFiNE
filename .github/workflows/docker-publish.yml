@@ -37,6 +37,14 @@ on:
         description: 'Also publish to Docker Hub'
         type: boolean
         default: true
+      include-admin:
+        description: 'Include the admin panel bundle'
+        type: boolean
+        default: true
+      include-mobile:
+        description: 'Include the mobile web bundle'
+        type: boolean
+        default: true
       moving-tags:
         description: 'Move `latest` and `<channel>` tags to this build'
         type: boolean
@@ -55,14 +63,16 @@ jobs:
       app-version: ${{ steps.prepare.outputs.app-version }}
       git-short-hash: ${{ steps.prepare.outputs.git-short-hash }}
       dockerhub-namespace: ${{ steps.prepare.outputs.dockerhub-namespace }}
+      server-native-targets: ${{ steps.prepare.outputs.server-native-targets }}
     steps:
       - uses: actions/checkout@v7
-      - name: Resolve version and image namespace
+      - name: Resolve version, image namespace and Rust targets
         id: prepare
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.app-version }}
           BUILD_TYPE: ${{ inputs.build-type }}
+          PLATFORMS: ${{ inputs.platforms }}
           DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub && secrets.DOCKER_USER || '' }}
         run: |
           set -euo pipefail
@@ -71,10 +81,29 @@ jobs:
           if [ -z "${app_version}" ]; then
             app_version="$(date '+%Y.%-m.%-d')-${BUILD_TYPE}.$(date '+%H%M')"
           fi
+          # Build only the Rust targets the requested platforms actually need.
+          case "${PLATFORMS}" in
+            *arm/v7*)
+              native_targets='[{"name":"x86_64-unknown-linux-gnu","file":"server-native.x64.node"},{"name":"aarch64-unknown-linux-gnu","file":"server-native.arm64.node"},{"name":"armv7-unknown-linux-gnueabihf","file":"server-native.armv7.node"}]'
+              ;;
+            *arm64*)
+              native_targets='[{"name":"x86_64-unknown-linux-gnu","file":"server-native.x64.node"},{"name":"aarch64-unknown-linux-gnu","file":"server-native.arm64.node"}]'
+              ;;
+            *)
+              native_targets='[{"name":"x86_64-unknown-linux-gnu","file":"server-native.x64.node"}]'
+              ;;
+          esac
           echo "app-version=${app_version}" >> "$GITHUB_OUTPUT"
           echo "git-short-hash=${git_short_hash}" >> "$GITHUB_OUTPUT"
           echo "dockerhub-namespace=${DOCKERHUB_NAMESPACE}" >> "$GITHUB_OUTPUT"
-          echo "Publishing version ${app_version} (${git_short_hash}) as ${BUILD_TYPE}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "server-native-targets=${native_targets}" >> "$GITHUB_OUTPUT"
+          {
+            echo "Publishing version \`${app_version}\` (\`${git_short_hash}\`) as \`${BUILD_TYPE}\`"
+            echo ""
+            echo "- platforms: \`${PLATFORMS}\`"
+            echo "- rust targets: \`${native_targets}\`"
+            echo "- docker hub: \`${DOCKERHUB_NAMESPACE:-disabled}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build and push
@@ -89,6 +118,9 @@ jobs:
       image-namespace: ${{ github.repository_owner }}
       dockerhub-namespace: ${{ needs.prepare.outputs.dockerhub-namespace }}
       platforms: ${{ inputs.platforms }}
+      server-native-targets: ${{ needs.prepare.outputs.server-native-targets }}
+      build-admin: ${{ inputs.include-admin }}
+      build-mobile: ${{ inputs.include-mobile }}
 
   tag:
     name: Move release tags

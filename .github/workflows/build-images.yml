@@ -29,6 +29,16 @@ on:
         type: string
         required: false
         default: 'linux/amd64,linux/arm64,linux/arm/v7'
+      build-admin:
+        description: 'Build the admin panel bundle.'
+        type: boolean
+        required: false
+        default: true
+      build-mobile:
+        description: 'Build the mobile web bundle.'
+        type: boolean
+        required: false
+        default: true
       server-native-targets:
         description: 'JSON matrix of Rust targets to build.'
         type: string
@@ -100,6 +110,7 @@ jobs:
 
   build-admin:
     name: Build @affine/admin
+    if: ${{ inputs.build-admin }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.build-type }}
     steps:
@@ -131,6 +142,7 @@ jobs:
 
   build-mobile:
     name: Build @affine/mobile
+    if: ${{ inputs.build-mobile }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.build-type }}
     steps:
@@ -233,6 +245,9 @@ jobs:
   build-images:
     name: Build Images
     runs-on: ubuntu-latest
+    # Optional bundles (admin/mobile) may be skipped; only fail the image when a
+    # job that actually ran failed.
+    if: ${{ !cancelled() && !failure() }}
     needs:
       - build-server
       - build-web
@@ -280,16 +295,26 @@ jobs:
           path: ./packages/frontend/apps/web/dist
 
       - name: Download mobile artifact
+        if: ${{ inputs.build-mobile }}
         uses: actions/download-artifact@v4
         with:
           name: mobile
           path: ./packages/frontend/apps/mobile/dist
 
+      - name: Provide empty mobile artifact
+        if: ${{ !inputs.build-mobile }}
+        run: mkdir -p ./packages/frontend/apps/mobile/dist
+
       - name: Download admin artifact
+        if: ${{ inputs.build-admin }}
         uses: actions/download-artifact@v4
         with:
           name: admin
           path: ./packages/frontend/admin/dist
+
+      - name: Provide empty admin artifact
+        if: ${{ !inputs.build-admin }}
+        run: mkdir -p ./packages/frontend/admin/dist
 
       - name: Install Node.js dependencies
         run: |

@@ -1,9 +1,8 @@
 name: Release
 
+# Manual-only: the daily upstream release train is not used by this fork. Run
+# "Publish Docker Image" to build and push server images instead.
 on:
-  schedule:
-    - cron: '0 9 * * *'
-
   workflow_dispatch:
     inputs:
       web:
