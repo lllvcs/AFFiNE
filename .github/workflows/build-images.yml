@@ -188,10 +188,45 @@ jobs:
         with:
           electron-install: false
           extra-flags: workspaces focus @affine/server-native
+      - name: Resolve the Pro public key to embed
+        id: pro-key
+        shell: bash
+        # The native module bakes this key in at compile time (option_env! in
+        # packages/backend/native/src/lib.rs) and the server refuses to start
+        # without it: "AFFINE_PRO_PUBLIC_KEY must be embedded in self-hosted
+        # server-native builds". An unset secret used to be passed as an empty
+        # string, which compiled into a module without a key at all and made the
+        # migration job of every image built from this fork fail. Upstream
+        # hardcodes the same public key in its workflow, so falling back to it
+        # keeps a fork working; the secret overrides it.
+        env:
+          CONFIGURED_AFFINE_PRO_PUBLIC_KEY: ${{ secrets.AFFINE_PRO_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CONFIGURED_AFFINE_PRO_PUBLIC_KEY}" ]; then
+            echo "Embedding the AFFINE_PRO_PUBLIC_KEY from the repository secret."
+            key="${CONFIGURED_AFFINE_PRO_PUBLIC_KEY}"
+          else
+            echo "No AFFINE_PRO_PUBLIC_KEY secret, embedding the public key the upstream sources ship."
+            key=$'-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEObwJiTmbui7rkWfPJ7Lozvuy2Rcl\notcrb0V6dlS2ijKEShm7ZttTwQn08xzesdjX/AxpoR5X9yfoHkauIBuuMQ==\n-----END PUBLIC KEY-----\n'
+          fi
+          case "${key}" in
+            *'BEGIN PUBLIC KEY'*) ;;
+            *)
+              echo "::error::the resolved AFFINE_PRO_PUBLIC_KEY is not a PEM public key"
+              exit 1
+              ;;
+          esac
+          {
+            echo 'value<<AFFINE_PRO_PUBLIC_KEY_EOF'
+            printf '%s\n' "${key}"
+            echo 'AFFINE_PRO_PUBLIC_KEY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build Rust
         uses: ./.github/actions/build-rust
         env:
-          AFFINE_PRO_PUBLIC_KEY: ${{ secrets.AFFINE_PRO_PUBLIC_KEY }}
+          AFFINE_PRO_PUBLIC_KEY: ${{ steps.pro-key.outputs.value }}
           AFFINE_PRO_LICENSE_AES_KEY: ${{ secrets.AFFINE_PRO_LICENSE_AES_KEY }}
         with:
           target: ${{ matrix.targets.name }}
@@ -257,6 +292,30 @@ jobs:
         with:
           name: server-dist
           path: ./packages/backend/server/dist
+      - name: Verify the native modules embed the Pro public key
+        # Without a key the server throws on start ("AFFINE_PRO_PUBLIC_KEY must
+        # be embedded in self-hosted server-native builds"), so fail the image
+        # build here instead of shipping one that cannot run.
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          # the napi loader needs all three, and each one needs the key
+          for name in server-native.x64.node server-native.arm64.node server-native.armv7.node; do
+            file="./packages/backend/server/dist/$name"
+            if [ ! -f "$file" ]; then
+              echo "::error::expected native module $file is missing"
+              failed=1
+              continue
+            fi
+            if grep -q -- 'BEGIN PUBLIC KEY' "$file"; then
+              echo "ok: $(basename "$file") embeds a public key"
+            else
+              echo "::error file=$file::no AFFINE_PRO_PUBLIC_KEY embedded, the server would refuse to start"
+              failed=1
+            fi
+          done
+          exit "$failed"
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
