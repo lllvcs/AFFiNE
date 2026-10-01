@@ -121,6 +121,9 @@ impl ServerConfig {
     for (module, key) in [
       ("auth", "passwordRequirements"),
       ("auth", "signInRateLimit"),
+      ("auth", "signInMethods.password"),
+      ("auth", "signInMethods.magicLink"),
+      ("auth", "signInMethods.oauth"),
       ("auth", "trustedCloudflareHeaders"),
       ("copilot", "exa"),
       ("copilot", "unsplash"),
