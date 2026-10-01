@@ -1,300 +1,486 @@
-<div align="center">
+# AFFiNE — self-hosted fork
 
-<h1 style="border-bottom: none">
-    <b><a href="https://affine.pro">AFFiNE.Pro</a></b><br />
-    Write, Draw and Plan All at Once
-    <br>
-</h1>
-<a href="https://affine.pro/download">
-    <img alt="affine logo" src="https://cdn.affine.pro/Github_hero_image2.png" style="width: 100%">
-</a>
-<br/>
-<p align="center">
-  A privacy-focused, local-first, open-source, and ready-to-use alternative for Notion & Miro. <br />
-  One hyper-fused platform for wildly creative minds.
-</p>
+[中文说明 / Chinese README](./README.zh-CN.md)
 
-<br/>
+This repository is a **source-level fork of [AFFiNE](https://github.com/toeverything/AFFiNE)**,
+kept for running AFFiNE on your own hardware. Upstream ships a great editor but
+optimises for its cloud; a self-hosted instance has different constraints, and
+several of them are hard blockers rather than preferences (a server that only
+speaks to unreleased clients, an SSO provider that never publishes
+`email_verified`, quotas that were never meant to be reachable on your own box).
 
-<br/>
-<a href="https://www.producthunt.com/posts/affine-3?utm_source=badge-featured&utm_medium=badge&utm_souce=badge-affine&#0045;3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=440671&theme=light" alt="AFFiNE - One&#0032;app&#0032;for&#0032;all&#0032;&#0045;&#0032;Where&#0032;Notion&#0032;meets&#0032;Miro | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-<br/>
-<br/>
+Everything below is what this fork changes **on top of the upstream source**, how
+to deploy it, and which configuration actually does something. It is written to
+be enough on its own — you should not need to read the source to get an instance
+running.
 
-<div align="center">
-    <a href="https://affine.pro">Home Page</a> |
-    <a href="https://affine.pro/redirect/discord">Discord</a> |
-    <a href="https://app.affine.pro">Live Demo</a> |
-    <a href="https://affine.pro/blog/">Blog</a> |
-    <a href="https://docs.affine.pro/">Documentation</a>
-</div>
-<br/>
+- Upstream project: <https://github.com/toeverything/AFFiNE>
+- Fork: <https://github.com/lllvcs/AFFiNE> (branch `canary`)
+- Images: `ghcr.io/lllvcs/affine` (GHCR) · `lvcs/affine` (Docker Hub)
 
-[![Releases](https://img.shields.io/github/downloads/toeverything/AFFiNE/total)](https://github.com/toeverything/AFFiNE/releases/latest)
-[![All Contributors][all-contributors-badge]](#contributors)
-[![TypeScript-version-icon]](https://www.typescriptlang.org/)
+---
 
-</div>
+## 1. What this fork changes
 
-<br />
-<div align="center">
-<em>Docs, canvas and tables are hyper-merged with AFFiNE - just like the word affine (əˈfʌɪn | a-fine).</em>
-</div>
-<br />
+### 1.1 Self-hosting limits are actually lifted
 
-<div align="center">
-<img src="https://github.com/toeverything/AFFiNE/assets/79301703/49a426bb-8d2b-4216-891a-fa5993642253" style="width: 100%"/>
-</div>
+Upstream keeps cloud quotas in the code paths a self-hosted instance also runs
+through, so a personal deployment can hit seat, storage or history limits that
+make no sense there. This fork raises them for self-hosted deployments: blob
+limit 10 GiB, storage quota 2^53−1, seat limit `i32::MAX` and a history period of
+100 years, with the `unlimitedCopilot` / `copilotByok` flags available.
 
-## Getting started & staying tuned with us.
+*Commits:* `c5844b1` (and follow-ups).
 
-Star us, and you will receive all release notifications from GitHub without any delay!
+### 1.2 Copilot: BYOK model listing and diagnoseable routing failures
 
-<img src="https://user-images.githubusercontent.com/79301703/230891830-0110681e-8c7e-483b-b6d9-9e42b291b9ef.gif" style="width: 100%"/>
+* **List models from your own provider.** BYOK profiles can query the provider's
+  model list instead of forcing you to type model ids by hand (`c5844b1`).
+* **"No compatible model" is no longer a dead end.** AFFiNE's chat always sends
+  tools (workspace search / reading docs), so the chat route requires a model that
+  declares `tool_calling` — a fact the old error message never mentioned. Native
+  routing failures now carry the slot, the required capabilities, the workspace,
+  the deployment type and the BYOK state, and the server turns the native
+  semantic errors into actionable HTTP errors (`a16e5f3`). The frontend's BYOK
+  coverage indicator also states that chat needs text output **and** tool calling,
+  in both English and Chinese (`4d1f8b8`).
+* Profiles silently skipped by policy are now logged on the native side instead
+  of disappearing without a trace (`a16e5f3`).
 
-## What is AFFiNE
+### 1.3 OIDC: providers that never publish `email_verified`
 
-[AFFiNE](https://affine.pro) is an open-source, all-in-one workspace and an operating system for all the building blocks that assemble your knowledge base and much more -- wiki, knowledge management, presentation and digital assets. It's a better alternative to Notion and Miro.
+Small self-hosted identity providers — Synology SSO is the example this fork was
+built against — advertise `claims_supported: aud, email, exp, groups, iat, iss,
+sub, username`. They never send `email_verified`, and the strict check rejected
+every login with `INVALID_OAUTH_RESPONSE`.
 
-## Features
+`oauth.providers.oidc.trustUnverifiedEmail` (default `false`, fail-closed) trusts
+the address **when the claim is absent**. An explicit `email_verified: false` is
+still rejected, `args.claim_email_verified` remaps the claim name, and the OAuth
+error reasons are now specific (`missing_id_token`, `missing_email_verified_claim`,
+`email_not_verified`, `userinfo_subject_mismatch`, `missing_subject`,
+`missing_email`, `id_token_*`) instead of one opaque string. Three Rust unit tests
+cover it (`42bbe52`).
 
-**A true canvas for blocks in any form. Docs and whiteboard are now fully merged.**
+### 1.4 Realtime sync works with released clients
 
-- Many editor apps claim to be a canvas for productivity, but AFFiNE is one of the very few which allows you to put any building block on an edgeless canvas -- rich text, sticky notes, any embedded web pages, multi-view databases, linked pages, shapes and even slides. We have it all.
+AFFiNE 0.27.5 replaced the room-based sync protocol with `space:join-batch` and
+**deleted the older handshake**. The practical result: a server built from that
+source rejects every released client — the 0.27.4 desktop app and the 0.27.1
+mobile app — with a WebSocket that connects and immediately disconnects, no sync,
+and a workspace root document that never gets pushed (which shows up as
+`DOC_NOT_FOUND` for a brand-new workspace).
 
-**Multimodal AI partner ready to kick in any work**
+This fork re-adds the legacy protocol **next to** the batch one (`9b9f22e`):
 
-- Write up professional work report? Turn an outline into expressive and presentable slides? Summary an article into a well-structured mindmap? Sorting your job plan and backlog for tasks? Or... draw and code prototype apps and web pages directly all with one prompt? With you, [AFFiNE AI](https://affine.pro/ai) pushes your creativity to the edge of your imagination, just like [Canvas AI](https://affine.pro/blog/best-canvas-ai) to generate mind map for brainstorming.
+* `space:join`, `space:join-awareness` and `space:leave-awareness` are handled
+  again, with the `>=0.25.0` floor and the `sync-025` / `sync-026` room split.
+* Doc updates are broadcast to both the legacy rooms and the new per-document
+  path, so old and new clients see each other's edits.
+* Legacy sockets are authorized per request (`assertDocActionAllowed`), as 0.27.4
+  did, because they hold no in-memory document subscriptions.
+* A rejected join now logs the client version and the floor it failed
+  (`6912abd`), and an accepted legacy join logs
+  `Legacy sync join accepted: client=… version=… protocol=…`. This class of
+  failure used to be invisible in every log and every client.
 
-**Local-first & Real-time collaborative**
+### 1.5 Each sign-in method is switchable
 
-- We love the idea of local-first that you always own your data on your disk, in spite of the cloud. Furthermore, AFFiNE supports real-time sync and collaborations on web and cross-platform clients.
+Upstream has no way to turn off email+password or magic-link sign-in:
+`auth.allowSignup` is declared but never enforced, and the login page offers
+methods the server will accept. `auth.signInMethods.{password,magicLink,oauth}`
+(default: all `true`) fixes that (`28ac1be`):
 
-**Self-host & Shape your own AFFiNE**
+* the sign-in endpoint **refuses** a disabled method (both the password and the
+  magic-link branch of `POST /api/auth/sign-in`, plus `POST /api/auth/magic-link`);
+* the login preflight reports it as `available: false`, which is what the client
+  already reads, so the login page stops offering it without any client change;
+* with `oauth: false` the OAuth endpoints refuse to start a flow and the resolver
+  stops advertising providers.
 
-- You have the freedom to manage, self-host, fork and build your own AFFiNE. Plugin community and third-party blocks are coming soon. More tractions on [Blocksuite](https://blocksuite.io). Check there to learn how to [self-host AFFiNE](https://docs.affine.pro/self-host-affine).
+See [§3.3](#33-oidc-only-instance) for the OIDC-only recipe.
 
-## Acknowledgement
+### 1.6 Self-hosting documentation
 
-“We shape our tools and thereafter our tools shape us”. A lot of pioneers have inspired us along the way, e.g.:
+`server.hosts` takes **bare hosts, not URLs**; the scheme comes from
+`server.https` and the port is appended automatically only for `localhost` and
+bare IPs (`9bb4520`). Getting this wrong is the usual cause of
+`Blocked CORS request` / `Blocked WebSocket CORS request` and non-working
+realtime sync — see [§6](#6-troubleshooting).
 
-- Quip & Notion with their great concept of “everything is a block”
-- Trello with their Kanban
-- Airtable & Miro with their no-code programmable datasheets
-- Miro & Whimiscal with their edgeless visual whiteboard
-- Remote & Capacities with their object-based tag system
+### 1.7 Image builds: build and publish are separate steps
 
-There is a large overlap of their atomic “building blocks” between these apps. They are not open source, nor do they have a plugin system like Vscode for contributors to customize. We want to have something that contains all the features we love and also goes one step even further.
+The image pipeline was reworked so that building and publishing can be done
+independently, and so that `latest` can never point at something that is not an
+image:
 
-Thanks for checking us out, we appreciate your interest and sincerely hope that AFFiNE resonates with you! 🎵 Checking https://affine.pro/ for more details ions.
+* `Build Images` (`build-images.yml`) produces the image and pushes it to GHCR
+  only; that is the hand-off artifact.
+* `Publish Docker Image` (`docker-publish.yml`) is manual: it copies the GHCR
+  image to Docker Hub **registry-to-registry** and moves `latest` / `<channel>` /
+  `<version>` on both registries. Nothing is rebuilt, so publishing a
+  multi-gigabyte multi-platform image takes seconds.
+* The self-hosted native builds embed the Pro **public** key, and the build
+  fails loudly if it cannot be resolved, instead of producing an image that
+  cannot verify licences (`fdf8f1b`).
 
-## Contributing
+*Commits:* `b4781c0`, `24f5675`, `d7d383b`, `d96b436`, `fa43b17`, `a49759d`,
+`4c85772`, `e1bcbd4`, `fdf8f1b`.
 
-| Bug Reports                                                                                                                                         | Feature Requests                                                                                                                                               | Questions/Discussions                                                         | AFFiNE Community                                                  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| [Create a bug report](https://github.com/toeverything/AFFiNE/issues/new?assignees=&labels=bug%2Cproduct-review&template=BUG-REPORT.yml&title=TITLE) | [Submit a feature request](https://github.com/toeverything/AFFiNE/issues/new?assignees=&labels=feat%2Cproduct-review&template=FEATURE-REQUEST.yml&title=TITLE) | [Check GitHub Discussion](https://github.com/toeverything/AFFiNE/discussions) | [Visit the AFFiNE's Discord](https://affine.pro/redirect/discord) |
-| Something isn't working as expected                                                                                                                 | An idea for a new feature, or improvements                                                                                                                     | Discuss and ask questions                                                     | A place to ask, learn and engage with others                      |
+---
 
-Calling all developers, testers, tech writers and more! Contributions of all types are more than welcome, you can read more in [docs/types-of-contributions.md](docs/types-of-contributions.md). If you are interested in contributing code, read our [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) and feel free to check out our GitHub issues to get stuck in to show us what you’re made of.
+## 2. Deploy
 
-**Before you start contributing, please sign our [Contributor License Agreement] — it takes less than a minute with your GitHub account. Pull requests cannot be merged until every committer has signed (the `license/cla` check on your PR). Full text: [CLA.md](.github/CLA.md).**
+### 2.1 docker compose
 
-For **bug reports**, **feature requests** and other **suggestions** you can also [create a new issue](https://github.com/toeverything/AFFiNE/issues/new/choose) and choose the most appropriate template for your feedback.
+```yaml
+services:
+  affine:
+    image: ghcr.io/lllvcs/affine:latest   # or lvcs/affine:latest from Docker Hub
+    restart: unless-stopped
+    ports:
+      - '3010:3010'
+    volumes:
+      - ./config/config.json:/app/config.json:ro   # see §2.2
+      - ./storage:/root/.affine/storage
+    environment:
+      - AFFINE_BACKEND_RUNTIME_CONFIG_PATH=/app/config.json
+    depends_on:
+      - postgres
+      - redis
 
-For **translation** and **language support** you can visit our [Discord](https://affine.pro/redirect/discord).
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=affine
+      - POSTGRES_PASSWORD=change-me
+      - POSTGRES_DB=affine
 
-If you have questions, you are welcome to contact us. One of the best places to get more info and learn more is in the [Discord](https://affine.pro/redirect/discord) where you can engage with other like-minded individuals.
-
-## Templates
-
-AFFiNE now provides pre-built [templates](https://affine.pro/templates) from our team. Following are the Top 10 most popular templates among AFFiNE users,if you want to contribute, you can contribute your own template so other people can use it too.
-
-- [vision board template](https://affine.pro/templates/category-vision-board-template)
-- [one pager template](https://affine.pro/templates/category-one-pager-template-free)
-- [sample lesson plan math template](https://affine.pro/templates/sample-lesson-plan-math-template)
-- [grr lesson plan template free](https://affine.pro/templates/grr-lesson-plan-template-free)
-- [free editable lesson plan template for pre k](https://affine.pro/templates/free-editable-lesson-plan-template-for-pre-k)
-- [high note collection planners](https://affine.pro/templates/high-note-collection-planners)
-- [digital planner](https://affine.pro/templates/category-digital-planner)
-- [ADHD Planner](https://affine.pro/templates/adhd-planner)
-- [Reading Log](https://affine.pro/templates/reading-log)
-- [Cornell Notes Template](https://affine.pro/templates/category-cornell-notes-template)
-
-## Blog
-
-Welcome to the AFFiNE blog section! Here, you’ll find the latest insights, tips, and guides on how to maximize your experience with AFFiNE and AFFiNE AI, the leading Canvas AI tool for flexible note-taking and creative organization.
-
-- [vision board template](https://affine.pro/blog/8-free-printable-vision-board-templates-examples-2023)
-- [ai homework helper](https://affine.pro/blog/ai-homework-helper)
-- [vision board maker](https://affine.pro/blog/vision-board-maker)
-- [itinerary template](https://affine.pro/blog/free-customized-travel-itinerary-planner-templates)
-- [one pager template](https://affine.pro/blog/top-12-one-pager-examples-how-to-create-your-own)
-- [cornell notes template](https://affine.pro/blog/the-cornell-notes-template-and-system-learning-tips)
-- [swot chart template](https://affine.pro/blog/top-10-free-editable-swot-analysis-template-examples)
-- [apps like luna task](https://affine.pro/blog/apps-like-luna-task)
-- [note taking ai from rough notes to mind map](https://affine.pro/blog/dynamic-AI-notes)
-- [canvas ai](https://affine.pro/blog/best-canvas-ai)
-- [one pager](https://affine.pro/blog/top-12-one-pager-examples-how-to-create-your-own)
-- [SOP Template](https://affine.pro/blog/how-to-write-sop-step-by-step-guide-5-best-free-tools-templates)
-- [Chore Chart](https://affine.pro/blog/10-best-free-chore-chart-templates-kids-adults)
-
-## Ecosystem
-
-| Name                                             |                            |                                                                                                                                         |
-| ------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| [@affine/component](packages/frontend/component) | AFFiNE Component Resources | ![](https://img.shields.io/codecov/c/github/toeverything/affine?style=flat-square)                                                      |
-| [@toeverything/theme](packages/common/theme)     | AFFiNE theme               | [![](https://img.shields.io/npm/dm/@toeverything/theme?style=flat-square&color=eee)](https://www.npmjs.com/package/@toeverything/theme) |
-
-## Upstreams
-
-We would also like to give thanks to open-source projects that make AFFiNE possible:
-
-- [Blocksuite](https://github.com/toeverything/BlockSuite) - 💠 BlockSuite is the open-source collaborative editor project behind AFFiNE.
-- [y-octo](https://github.com/y-crdt/y-octo) - 🐙 y-octo is a native, high-performance, thread-safe YJS CRDT implementation, serving as the core engine enabling the AFFiNE Client/Server to achieve "local-first" functionality.
-- [OctoBase](https://github.com/toeverything/OctoBase) - 🐙 OctoBase is the open-source database behind AFFiNE, local-first, yet collaborative. A light-weight, scalable, data engine written in Rust.
-
-- [yjs](https://github.com/yjs/yjs) - Fundamental support of CRDTs for our implementation on state management and data sync on web.
-- [electron](https://github.com/electron/electron) - Build cross-platform desktop apps with JavaScript, HTML, and CSS.
-- [React](https://github.com/facebook/react) - The library for web and native user interfaces.
-- [napi-rs](https://github.com/napi-rs/napi-rs) - A framework for building compiled Node.js add-ons in Rust via Node-API.
-- [Jotai](https://github.com/pmndrs/jotai) - Primitive and flexible state management for React.
-- [async-call-rpc](https://github.com/Jack-Works/async-call-rpc) - A lightweight JSON RPC client & server.
-- [Vite](https://github.com/vitejs/vite) - Next generation frontend tooling.
-- Other upstream [dependencies](https://github.com/toeverything/AFFiNE/network/dependencies).
-
-Thanks a lot to the community for providing such powerful and simple libraries, so that we can focus more on the implementation of the product logic, and we hope that in the future our projects will also provide a more easy-to-use knowledge base for everyone.
-
-## Contributors
-
-We would like to express our gratitude to all the individuals who have already contributed to AFFiNE! If you have any AFFiNE-related project, documentation, tool or template, please feel free to contribute it by submitting a pull request to our curated list on GitHub: [awesome-affine](https://github.com/toeverything/awesome-affine).
-
-<a href="https://github.com/toeverything/affine/graphs/contributors">
-  <img alt="contributors" src="https://opencollective.com/affine/contributors.svg?width=890&button=false" />
-</a>
-
-## Self-Host
-
-Begin with Docker to deploy your own feature-rich, unrestricted version of AFFiNE. Our team is diligently updating to the latest version. For more information on how to self-host AFFiNE, please refer to our [documentation](https://docs.affine.pro/self-host-affine).
-
-### Fork notes (lllvcs/AFFiNE)
-
-Configuration goes into the JSON file passed via `AFFINE_BACKEND_RUNTIME_CONFIG_PATH`. See [`.docker/selfhost/config.json.example`](.docker/selfhost/config.json.example) for a working starting point.
-
-- **`server.externalUrl` must be the URL you actually open the app with.** The
-  CORS/origin allowlist is derived from it, so a mismatch makes every client
-  request log `Blocked CORS request from origin: …` / `Blocked WebSocket CORS
-  request from origin: …` and breaks realtime sync, the desktop client and any
-  second entry point (Tailscale IP, LAN IP, reverse-proxied domain).
-- **`server.hosts` takes bare hosts, not URLs.** The scheme comes from
-  `server.https` (`false` → `http`), and the port is appended automatically only
-  for `localhost` and bare IPs — include the port yourself for hostnames. So for
-  a plain-HTTP instance reachable on `http://100.111.1.1:3010` and
-  `http://nas.local:3010` with an HTTPS domain in `externalUrl`:
-  `"https": false, "hosts": ["100.111.1.1", "nas.local:3010"]`.
-- **OIDC providers that never publish `email_verified`** (Synology SSO only
-  advertises `aud, email, exp, groups, iat, iss, sub, username`) are rejected by
-  the default strict check. Set `oauth.providers.oidc.trustUnverifiedEmail: true`
-  to trust the address when the claim is absent — an explicit
-  `email_verified: false` is still rejected. `args.claim_email_verified` remaps
-  the claim to a different name when the provider uses one.
-- **Sign-in methods are individually switchable.** `auth.signInMethods.password`,
-  `auth.signInMethods.magicLink` and `auth.signInMethods.oauth` (all default
-  `true`) decide which ways in the server accepts. A disabled method is refused
-  by the API *and* stops being advertised to the client, so the login page no
-  longer offers it. For an OIDC-only instance — the usual reason to run SSO —
-  disable the other two:
-
-```json
-{
-  "auth": {
-    "signInMethods": {
-      "password": false,
-      "magicLink": false,
-      "oauth": true
-    }
-  }
-}
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - ./redis:/data
 ```
 
-  The same three switches work as environment variables, which is handy for
-  trying a setting out before writing it into `config.json`:
+The image runs its own migrations on start (`affine_migration_job`), so a fresh
+database is initialised on the first boot.
 
-  | Setting | Environment variable |
-  | --- | --- |
-  | `auth.signInMethods.password` | `AFFINE_AUTH_SIGN_IN_PASSWORD` |
-  | `auth.signInMethods.magicLink` | `AFFINE_AUTH_SIGN_IN_MAGIC_LINK` |
-  | `auth.signInMethods.oauth` | `AFFINE_AUTH_SIGN_IN_OAUTH` |
+### 2.2 Where the configuration file has to live
 
-  A boolean environment variable counts as enabled when it is `1` or `true`
-  (case-insensitive) and as disabled otherwise, so set it to `0`/`false` to turn
-  a method off. ⚠️ Lock yourself out with care: before disabling password and
-  magic link, sign in once through OIDC and check that the account has admin
-  access, because afterwards there is no other way in.
+This is the single most confusing part of self-hosting AFFiNE. There are **two
+readers** with **two different paths**:
 
-```json
+| Reader | Path it reads |
+| --- | --- |
+| Node server (TS) | `/app/config.json` first, otherwise `$HOME/.affine/config/config.json` (in the image `$HOME` is `/root`) |
+| Native runtime (Rust) | the file named by `AFFINE_BACKEND_RUNTIME_CONFIG_PATH` |
+
+If the two disagree you get a server that logs changes as applied while half of
+them stay inert, and settings such as `server.hosts` never reach the CORS
+allow-list. **Mount one file at `/app/config.json` and point
+`AFFINE_BACKEND_RUNTIME_CONFIG_PATH` at the same file** — that is what the
+compose above does.
+
+### 2.3 `crypto.privateKey` is required once BYOK is on
+
+`copilot.byok.enabled: true` (persistent BYOK) requires a **stable** private key,
+otherwise the server refuses to start:
+
+```
+[affine-runtime:invalid_state] stable crypto.privateKey is required when persistent BYOK is enabled
+```
+
+The value must be a real **EC P-256 private key in PEM (PKCS#8)** form — a random
+string fails with `error:1E08010C:DECODER routines::unsupported`, because the
+Node server parses it with `createPrivateKey()`. Generate one with the image's
+own Node:
+
+```sh
+docker compose exec affine node -e "
+const {generateKeyPairSync}=require('crypto');
+const {privateKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
+console.log(JSON.stringify({crypto:{privateKey:privateKey.export({format:'pem',type:'pkcs8'}).toString()}},null,2));
+"
+```
+
+Paste the printed `crypto` block into `config.json` (the `\n` escapes are part of
+the JSON string — keep it on one line) and restart.
+
+> **Note.** This key also encrypts the stored BYOK API keys (HKDF-derived
+> envelope). Changing it makes previously stored credentials undecryptable — you
+> will have to enter the API keys again. If an older key is still readable in
+> your database, prefer it:
+> `select value from app_configs where id = 'crypto.privateKey';`
+
+### 2.4 First-run checklist
+
+1. `server.externalUrl` set to the URL you actually browse (e.g.
+   `https://note.example.com`).
+2. Every entry point listed in `server.hosts` (Tailscale IP, LAN IP, reverse
+   proxy hostname) — bare hosts, no scheme, with the port only for hostnames.
+3. `crypto.privateKey` present if BYOK is enabled (§2.3).
+4. OIDC provider configured and a login tested **before** you disable the other
+   sign-in methods.
+5. Server reachable and the log line
+   `Telemetry allowed origins updated: …` contains each entry point you use.
+
+---
+
+## 3. Configuration reference
+
+### 3.1 `config.json`
+
+Every key below is read by this fork; keys marked *(native)* are validated by the
+native runtime and can also come from the environment variable in §3.2.
+
+```jsonc
 {
+  "$schema": "https://github.com/toeverything/affine/releases/latest/download/config.schema.json",
+  "deployment": { "type": "selfhosted" },
+
   "server": {
+    "name": "AFFiNE",
     "externalUrl": "https://note.example.com",
     "https": false,
-    "hosts": ["192.168.1.10", "nas.local:3010"]
+    "host": "localhost",                                    // env AFFINE_SERVER_HOST
+    "hosts": ["100.64.0.1", "nas.local:3010"],             // config.json only
+    "port": 3010,                                           // env AFFINE_SERVER_PORT
+    "listenAddr": "0.0.0.0",                                // env LISTEN_ADDR
+    "path": ""                                              // env AFFINE_SERVER_SUB_PATH
   },
+
+  "crypto": { "privateKey": "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----\n" },
+
   "oauth": {
     "providers": {
       "oidc": {
         "issuer": "https://idp.example.com/webman/sso",
         "clientId": "…",
         "clientSecret": "…",
-        "trustUnverifiedEmail": true,
-        "args": { "scope": "openid email" }
+        "allowPrivateNetwork": false,        // reach an IdP on a private network
+        "trustUnverifiedEmail": false,       // §1.3
+        "args": { "scope": "openid email", "claim_email_verified": "email_verified" }
       }
     }
+  },
+
+  "auth": {
+    "allowSignup": true,
+    "allowSignupForOauth": true,
+    "requireEmailDomainVerification": false,
+    "newAccountActionDelay": 0,
+    "signInMethods": { "password": true, "magicLink": true, "oauth": true },  // §1.5
+    "session": { "ttl": 2592000, "ttr": 86400 },
+    "token": { "accessTokenTtl": 3600, "refreshIdleTtl": 2592000,
+               "refreshAbsoluteTtl": 31536000, "refreshGracePeriod": 30,
+               "refreshRetention": 2592000 }
+  },
+
+  "copilot": {
+    "enabled": true,
+    "byok": {
+      "enabled": true,
+      "allowCustomEndpoint": true,      // required for any non-official endpoint
+      "allowPrivateEndpoint": true,
+      "allowedProviders": []            // empty = allow all
+    }
+  },
+
+  "indexer": {
+    "enabled": false,
+    "provider": { "type": "embedded", "endpoint": "", "apiKey": "", "username": "", "password": "" }
+  },
+
+  "redis": { "host": "redis", "port": 6379, "username": "", "password": "", "db": 0 },
+  "storages": { "avatar": { "storage": {} }, "blob": { "storage": {} } },
+  "payment": { "enabled": false }
+}
+```
+
+`db.datasourceUrl` (`DATABASE_URL`) and `mailer.*` (`MAILER_*`) are configured
+through the environment in the official images; `mailer.*` is only needed if you
+want magic-link email.
+
+### 3.2 Environment variables
+
+| Variable | Maps to | Notes |
+| --- | --- | --- |
+| `AFFINE_SERVER_EXTERNAL_URL` | `server.externalUrl` | Base URL used to generate links and the allowed-origin list |
+| `AFFINE_SERVER_HOST` | `server.host` | Single host, default `localhost` |
+| `AFFINE_SERVER_PORT` | `server.port` | Default `3010` |
+| `AFFINE_SERVER_HTTPS` | `server.https` | Boolean, default `false` |
+| `AFFINE_SERVER_SUB_PATH` | `server.path` | For sub-path deployments, e.g. `/affine` |
+| `LISTEN_ADDR` | `server.listenAddr` | Default `0.0.0.0` |
+| `AFFINE_BACKEND_RUNTIME_CONFIG_PATH` | — | Path to the JSON config read by the native runtime (§2.2) |
+| `AFFINE_PRIVATE_KEY` | `crypto.privateKey` | PEM key from §2.3 |
+| `AFFINE_AUTH_SIGN_IN_PASSWORD` | `auth.signInMethods.password` | Boolean: `1`/`true` = on, anything else = off |
+| `AFFINE_AUTH_SIGN_IN_MAGIC_LINK` | `auth.signInMethods.magicLink` | idem |
+| `AFFINE_AUTH_SIGN_IN_OAUTH` | `auth.signInMethods.oauth` | idem |
+| `DATABASE_URL` | `db.datasourceUrl` | PostgreSQL connection string |
+| `REDIS_SERVER_HOST` / `_PORT` / `_DATABASE` / `_USERNAME` / `_PASSWORD` | `redis.*` | |
+| `MAILER_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_SENDER` / `_SERVERNAME` / `_IGNORE_TLS` | `mailer.*` | Magic-link email |
+| `GA4_MEASUREMENT_ID`, `GA4_API_SECRET` | telemetry | Optional |
+
+`server.hosts` has **no** environment variable — it exists only in
+`config.json`. Some environment variables you may have seen in other
+compose files (for example `AFFINE_INDEXER_ENABLED`) are not wired to anything
+in this codebase; configure those keys in `config.json` instead.
+
+### 3.3 OIDC-only instance
+
+The usual reason to run SSO at all: no local passwords, no magic links, one
+identity provider.
+
+```json
+{
+  "auth": {
+    "signInMethods": { "password": false, "magicLink": false, "oauth": true }
   }
 }
 ```
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/toeverything/AFFiNE)
+Or, without touching the file:
 
-[![Run on Sealos](https://sealos.io/Deploy-on-Sealos.svg)](https://sealos.io/products/app-store/affine)
+```sh
+AFFINE_AUTH_SIGN_IN_PASSWORD=false AFFINE_AUTH_SIGN_IN_MAGIC_LINK=false AFFINE_AUTH_SIGN_IN_OAUTH=true
+```
 
-## Feature Request
+> ⚠️ **Do not lock yourself out.** Sign in through OIDC first and confirm the
+> account has admin access; afterwards there is no other way in. Keep a copy of
+> the previous `config.json` so you can roll back by restarting the container.
 
-For feature requests, please see [discussions](https://github.com/toeverything/AFFiNE/discussions/categories/ideas).
+The login page still shows the email field, because method availability is
+resolved per email address; entering one reports that the address cannot sign in.
+The OIDC buttons are unaffected.
 
-## Building
+---
 
-### Codespaces
+## 4. Images, tags and publishing
 
-From the GitHub repo main page, click the green "Code" button and select "Create codespace on master". This will open a new Codespace with the (supposedly auto-forked
-AFFiNE repo cloned, built, and ready to go).
+| Registry | Image |
+| --- | --- |
+| GHCR | `ghcr.io/lllvcs/affine` |
+| Docker Hub | `lvcs/affine` |
 
-### Local
+Tags: `latest` (newest published), the channel tag (`canary`), the version tag
+(`0.27.5`) and per-build tags containing the short commit hash
+(e.g. `canary-d96b436`).
 
-See [BUILDING.md] for instructions on how to build AFFiNE from source code.
+Publishing is deliberately two manual steps:
 
-## Contributing
+1. run **Build Images** (`build-images.yml`; also reachable through
+   `docker-build.yml`) — builds and pushes to GHCR. Inputs include
+   `build-type`, `app-version`, `git-short-hash`, `image-namespace`,
+   `platforms`, `build-admin`, `build-mobile`.
+2. run **Publish Docker Image** (`docker-publish.yml`) with `source-tag`
+   (defaults to the newest successful build), `dockerhub` and `moving-tags`.
 
-We welcome contributions from everyone.
-See [docs/contributing/tutorial.md](./docs/contributing/tutorial.md) for details.
+`latest` only ever moves in step 2 and only onto an image produced by step 1, so
+it cannot end up pointing at a non-image artifact.
 
-## License
+> ⚠️ **Do not lower the build version number below the source version.** The web
+> client is built from this source and reports the build version to the sync
+> gateway, which requires `>=0.27.5` for the batch protocol. Relabelling an image
+> as `0.27.4` therefore breaks the browser client (its WebSocket join is
+> rejected) even though the source is unchanged.
 
-### Editions
+---
 
-- AFFiNE Community Edition (CE) is the current available version, it's free for self-host under the MIT license.
+## 5. Upgrading
 
-- AFFiNE Enterprise Edition (EE) is yet to be published, it will have more advanced features and enterprise-oriented offerings, including but not exclusive to rebranding and SSO, advanced admin and audit, etc., you may refer to https://affine.pro/pricing for more information
+1. `docker compose pull` (or rebuild an image for your own changes).
+2. `docker compose up -d` — migrations run automatically.
+3. Watch the first ~30 lines of the server log: the migration job must finish and
+   the server must print `recognized as …` for your `server.externalUrl`.
 
-See [LICENSE] for details.
+Changes to `config.json` are picked up on restart; environment variables always
+need a restart.
 
-[all-contributors-badge]: https://img.shields.io/github/contributors/toeverything/AFFiNE
-[license]: ./LICENSE
-[building.md]: ./docs/BUILDING.md
-[update page]: https://affine.pro/blog?tag=Release%20Note
-[jobs available]: ./docs/jobs.md
-[latest packages]: https://github.com/toeverything/AFFiNE/pkgs/container/affine-self-hosted
-[contributor license agreement]: https://cla-assistant.io/toeverything/AFFiNE
-[stars-icon]: https://img.shields.io/github/stars/toeverything/AFFiNE.svg?style=flat&logo=github&colorB=red&label=stars
-[codecov]: https://codecov.io/gh/toeverything/affine/branch/canary/graphs/badge.svg?branch=canary
-[typescript-version-icon]: https://img.shields.io/github/package-json/dependency-version/toeverything/affine/dev/typescript
-[react-version-icon]: https://img.shields.io/github/package-json/dependency-version/toeverything/AFFiNE/react?filename=packages%2Ffrontend%2Fcore%2Fpackage.json&color=rgb(97%2C228%2C251)
-[blocksuite-icon]: https://img.shields.io/github/package-json/dependency-version/toeverything/AFFiNE/@blocksuite/store?color=6880ff&filename=packages%2Ffrontend%2Fcore%2Fpackage.json&label=blocksuite
+---
+
+## 6. Troubleshooting
+
+**Realtime sync never starts, `Blocked CORS request` / `Blocked WebSocket CORS
+request` in the log.** The allowed-origin list comes from `server.externalUrl`,
+`server.host`, `server.hosts` and `server.port`. Add the exact origin you browse
+(bare host entries, no scheme) and confirm the startup line
+`Telemetry allowed origins updated: …` lists it.
+
+**A client connects and immediately disconnects, `Rejected WebSocket join …`.**
+The gateway refuses clients below the protocol floor. Since `9b9f22e` the
+supported range is `>=0.25.0` for the legacy handshake and `>=0.27.5` for
+`space:join-batch`; the log line names the version the client sent. Released
+clients (0.27.1 mobile, 0.27.4 desktop) use the legacy path and log
+`Legacy sync join accepted`.
+
+**A fresh workspace shows `DOC_NOT_FOUND` (`Doc <id> under Space <id> not
+found`).** The workspace root document is created by a client and pushed over
+sync; if the socket cannot join, it never lands. Fix the sync path above, then
+re-open the workspace (or create a new one) with a working client.
+
+**AI chat fails with `no_compatible_target`.** Chat always sends tools, so the
+route needs a model declaring `tool_calling`; a model with only text output is
+rejected. Either declare tool calling for the model in your gateway, or turn off
+the tools that chat enables by default (workspace search, reading docs). Since
+`a16e5f3` the error names the required capability instead of only the reason.
+Note that the BYOK "test" button probes your provider directly and does **not**
+run the routing decision, so a green test does not prove that chat will work.
+
+**`affine_server` restarts in a loop.** Read the error: a missing or malformed
+`crypto.privateKey` produces `stable crypto.privateKey is required …` or
+`1E08010C:DECODER routines::unsupported`. See §2.3.
+
+**Config edits seem to have no effect.** Two readers, two paths — see §2.2.
+
+---
+
+## 7. Development
+
+The fork's own changes live in a small number of places:
+
+| Area | Path |
+| --- | --- |
+| Native runtime config, sync gateway, auth | `packages/backend/native/src/runtime/**`, `packages/backend/server/src/core/sync/gateway.ts` |
+| Auth HTTP surface | `packages/backend/server/src/core/auth/{controller,service,config}.ts` |
+| OAuth/OIDC | `packages/backend/server/src/plugins/oauth/*`, `packages/backend/native/src/runtime/backend_runtime/auth_session/*` |
+| Copilot diagnostics | `packages/backend/native/src/runtime/backend_runtime/copilot/*`, `packages/backend/server/src/plugins/copilot/runtime/native-errors.ts` |
+| Frontend sign-in / BYOK | `packages/frontend/core/src/components/sign-in/*`, `.../setting/workspace-setting/byok/*` |
+| Config plumbing | `packages/backend/server/src/base/config/*` |
+| Image pipeline | `.github/workflows/*.yml` |
+
+Verification commands (all runnable from the repository root):
+
+```sh
+# native (Rust) — add your rustup toolchain path if cargo is not on PATH
+cargo check -p affine_server_native --lib
+
+# server (TypeScript)
+node_modules/.bin/tsc -p packages/backend/server/tsconfig.json --noEmit
+
+# lint
+node node_modules/oxlint/bin/oxlint <changed files>
+
+# generated GraphQL/native bindings, when the schema changes
+yarn affine <task>
+```
+
+Backend tests use `ava` and need PostgreSQL, Redis and the built native module:
+`yarn workspace @affine/server test`. Changes that touch the sync protocol or the
+auth surface deserve a test against a real client, because the pieces they
+interact with (socket rooms, permissions, client versions) cannot be reproduced
+in a unit test.
+
+---
+
+## 8. Upstream and licence
+
+This fork tracks upstream AFFiNE and keeps its licence: see
+[`LICENSE`](./LICENSE) and [`LICENSE-MIT`](./LICENSE-MIT). All credit for AFFiNE
+belongs to [TOEVERYTHING PTE. LTD. and its contributors](https://github.com/toeverything/AFFiNE).
+Changes made here are the ones listed in [§1](#1-what-this-fork-changes) — patches
+that exist to make a self-hosted deployment work, and are offered back in the
+hope they are useful.

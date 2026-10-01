@@ -55,6 +55,8 @@ testem.log
 tsconfig.tsbuildinfo
 .context
 /*.md
+# Translations of the README are tracked on purpose.
+!/README.zh-CN.md
 .codex
 .cursor
 
