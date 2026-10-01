@@ -176,6 +176,42 @@ We would like to express our gratitude to all the individuals who have already c
 
 Begin with Docker to deploy your own feature-rich, unrestricted version of AFFiNE. Our team is diligently updating to the latest version. For more information on how to self-host AFFiNE, please refer to our [documentation](https://docs.affine.pro/self-host-affine).
 
+### Fork notes (lllvcs/AFFiNE)
+
+Configuration goes into the JSON file passed via `AFFINE_BACKEND_RUNTIME_CONFIG_PATH`. See [`.docker/selfhost/config.json.example`](.docker/selfhost/config.json.example) for a working starting point.
+
+- **`server.externalUrl` must be the URL you actually open the app with.** The
+  CORS/origin allowlist is derived from it, so a mismatch makes every client
+  request log `Blocked CORS request from origin: …` and breaks the desktop client
+  and any second entry point (Tailscale IP, LAN IP, reverse-proxied domain).
+  Use `server.hosts: [...]` for additional entry points.
+- **OIDC providers that never publish `email_verified`** (Synology SSO only
+  advertises `aud, email, exp, groups, iat, iss, sub, username`) are rejected by
+  the default strict check. Set `oauth.providers.oidc.trustUnverifiedEmail: true`
+  to trust the address when the claim is absent — an explicit
+  `email_verified: false` is still rejected. `args.claim_email_verified` remaps
+  the claim to a different name when the provider uses one.
+
+```json
+{
+  "server": {
+    "externalUrl": "https://note.example.com",
+    "hosts": ["http://192.168.1.10:3010"]
+  },
+  "oauth": {
+    "providers": {
+      "oidc": {
+        "issuer": "https://idp.example.com/webman/sso",
+        "clientId": "…",
+        "clientSecret": "…",
+        "trustUnverifiedEmail": true,
+        "args": { "scope": "openid email" }
+      }
+    }
+  }
+}
+```
+
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/toeverything/AFFiNE)
 
 [![Run on Sealos](https://sealos.io/Deploy-on-Sealos.svg)](https://sealos.io/products/app-store/affine)

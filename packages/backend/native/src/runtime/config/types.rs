@@ -68,6 +68,9 @@ pub(crate) struct OAuthProviderRuntimeConfig {
   pub(crate) args: std::collections::BTreeMap<String, String>,
   pub(crate) issuer: Option<String>,
   pub(crate) allow_private_network: bool,
+  /// Trust an email address when the provider never publishes the
+  /// `email_verified` claim at all (an explicit `false` is still rejected).
+  pub(crate) trust_unverified_email: bool,
   pub(crate) apple_private_key: Option<Arc<Zeroizing<String>>>,
   pub(crate) apple_key_id: Option<String>,
   pub(crate) apple_team_id: Option<String>,

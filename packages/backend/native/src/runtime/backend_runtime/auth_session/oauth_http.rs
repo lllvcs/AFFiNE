@@ -393,15 +393,15 @@ async fn oidc(
     .get_json(&discovery.userinfo_endpoint, Some(&token.access_token))
     .await?;
   if user.get("sub").and_then(serde_json::Value::as_str) != claims.sub.as_deref() {
-    return Err(RuntimeError::invalid_state("invalid_oauth_response"));
+    return Err(RuntimeError::invalid_state(
+      "invalid_oauth_response:userinfo_subject_mismatch",
+    ));
   }
   let subject = resolve_string(config, "claim_id", "sub", &user, &claims)
-    .ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response"))?;
+    .ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response:missing_subject"))?;
   let email = resolve_string(config, "claim_email", "email", &user, &claims)
-    .ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response"))?;
-  if resolve_bool(config, "claim_email_verified", "email_verified", &user, &claims) != Some(true) {
-    return Err(RuntimeError::invalid_state("invalid_oauth_response"));
-  }
+    .ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response:missing_email"))?;
+  ensure_email_trusted(config, &user, &claims)?;
   Ok((
     OAuthAccount {
       subject,
@@ -413,6 +413,30 @@ async fn oidc(
   ))
 }
 
+/// Decide whether the provider's email assertion may be trusted.
+///
+/// A provider that says `email_verified: false` is never overridden by
+/// configuration. Providers that simply never publish the claim at all (Synology
+/// SSO, for instance, only advertises `aud, email, exp, groups, iat, iss, sub,
+/// username`) would otherwise reject every login, so an operator can opt in to
+/// trusting the address with `trustUnverifiedEmail`.
+fn ensure_email_trusted(
+  config: &OAuthProviderRuntimeConfig,
+  user: &serde_json::Value,
+  claims: &IdentityClaims,
+) -> RuntimeResult<()> {
+  match resolve_bool(config, "claim_email_verified", "email_verified", user, claims) {
+    Some(true) => Ok(()),
+    Some(false) => Err(RuntimeError::invalid_state(
+      "invalid_oauth_response:email_not_verified",
+    )),
+    None if config.trust_unverified_email => Ok(()),
+    None => Err(RuntimeError::invalid_state(
+      "invalid_oauth_response:missing_email_verified_claim",
+    )),
+  }
+}
+
 async fn verify_remote_token(
   token: Option<&str>,
   jwks_url: &str,
@@ -420,9 +444,19 @@ async fn verify_remote_token(
   audience: &str,
   http: &OAuthHttp,
 ) -> RuntimeResult<IdentityClaims> {
-  let token = token.ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response"))?;
+  let token = token.ok_or_else(|| RuntimeError::invalid_state("invalid_oauth_response:missing_id_token"))?;
   let jwks: jsonwebtoken::jwk::JwkSet = http.get_json(jwks_url, None).await?;
   oauth_jwt::verify_identity_token(token, &jwks, issuer, audience)
+    .map_err(|error| RuntimeError::invalid_state(identity_token_failure(error)))
+}
+
+fn identity_token_failure(error: RuntimeError) -> String {
+  match error {
+    RuntimeError::InvalidState(reason) | RuntimeError::InvalidInput(reason) => {
+      format!("invalid_oauth_response:id_token_{reason}")
+    }
+    _ => "invalid_oauth_response:id_token_rejected".to_string(),
+  }
 }
 
 fn resolve_string(
@@ -478,4 +512,129 @@ fn form<const N: usize>(fields: [(&str, &str); N]) -> BTreeMap<String, String> {
     .into_iter()
     .map(|(key, value)| (key.to_string(), value.to_string()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use std::collections::BTreeMap;
+  use std::sync::Arc;
+
+  use zeroize::Zeroizing;
+
+  use super::*;
+  use crate::runtime::OAuthProviderRuntimeConfig;
+
+  fn provider(trust_unverified_email: bool, args: BTreeMap<String, String>) -> OAuthProviderRuntimeConfig {
+    OAuthProviderRuntimeConfig {
+      client_id: "client".to_string(),
+      client_secret: Arc::new(Zeroizing::new("secret".to_string())),
+      args,
+      issuer: Some("https://idp.example".to_string()),
+      allow_private_network: false,
+      trust_unverified_email,
+      apple_private_key: None,
+      apple_key_id: None,
+      apple_team_id: None,
+    }
+  }
+
+  fn claims(extra: serde_json::Value) -> IdentityClaims {
+    IdentityClaims {
+      sub: Some("subject".to_string()),
+      email: Some("lvcs@example.com".to_string()),
+      nonce: None,
+      extra: match extra {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+      },
+    }
+  }
+
+  fn userinfo(value: serde_json::Value) -> serde_json::Value {
+    value
+  }
+
+  #[test]
+  fn verified_email_is_accepted_and_unverified_is_rejected() {
+    let config = provider(false, BTreeMap::new());
+    let empty = serde_json::json!({});
+
+    assert!(
+      ensure_email_trusted(
+        &config,
+        &userinfo(serde_json::json!({"email_verified": true})),
+        &claims(empty.clone())
+      )
+      .is_ok()
+    );
+
+    let error = ensure_email_trusted(
+      &config,
+      &userinfo(serde_json::json!({"email_verified": false})),
+      &claims(empty.clone()),
+    )
+    .expect_err("an explicit false must never be trusted");
+    assert!(matches!(
+      error,
+      RuntimeError::InvalidState(reason) if reason == "invalid_oauth_response:email_not_verified"
+    ));
+  }
+
+  #[test]
+  fn absent_claim_only_passes_with_the_opt_in() {
+    let strict = provider(false, BTreeMap::new());
+    let error = ensure_email_trusted(
+      &strict,
+      &userinfo(serde_json::json!({"email": "lvcs@example.com"})),
+      &claims(serde_json::json!({})),
+    )
+    .expect_err("the default stays strict");
+    assert!(matches!(
+      error,
+      RuntimeError::InvalidState(reason)
+        if reason == "invalid_oauth_response:missing_email_verified_claim"
+    ));
+
+    let trusting = provider(true, BTreeMap::new());
+    assert!(
+      ensure_email_trusted(
+        &trusting,
+        &userinfo(serde_json::json!({"email": "lvcs@example.com"})),
+        &claims(serde_json::json!({}))
+      )
+      .is_ok()
+    );
+    // The opt-in never overrides an explicit rejection from the provider.
+    assert!(
+      ensure_email_trusted(
+        &trusting,
+        &userinfo(serde_json::json!({"email_verified": false})),
+        &claims(serde_json::json!({}))
+      )
+      .is_err()
+    );
+  }
+
+  #[test]
+  fn claim_names_can_be_remapped_and_booleanish_strings_count() {
+    let args = BTreeMap::from([("claim_email_verified".to_string(), "email_verified_flag".to_string())]);
+    let config = provider(false, args);
+    // Reported by the id token rather than userinfo.
+    assert!(
+      ensure_email_trusted(
+        &config,
+        &userinfo(serde_json::json!({})),
+        &claims(serde_json::json!({"email_verified_flag": "yes"}))
+      )
+      .is_ok()
+    );
+    assert!(
+      ensure_email_trusted(
+        &config,
+        &userinfo(serde_json::json!({"email_verified_flag": "no"})),
+        &claims(serde_json::json!({}))
+      )
+      .is_err()
+    );
+  }
 }

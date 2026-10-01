@@ -126,7 +126,15 @@ export class OAuthService {
         throw new InvalidOauthCallbackCode({ status: 400, body: '' });
       }
       if (message.includes('invalid_oauth_response')) {
-        throw new InvalidOauthResponse({ reason: 'Invalid OAuth response.' });
+        // The native layer appends the failing step after a colon
+        // (`invalid_oauth_response:missing_email_verified_claim`), which is the
+        // difference between a 400 nobody can act on and one that names the fix.
+        const detail =
+          message.split('invalid_oauth_response')[1]?.replace(/^[:.\s]+/, '') ??
+          '';
+        throw new InvalidOauthResponse({
+          reason: detail || 'Invalid OAuth response.',
+        });
       }
       throw error;
     }

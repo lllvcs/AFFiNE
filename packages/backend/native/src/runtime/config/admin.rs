@@ -440,8 +440,11 @@ fn oauth_descriptors() -> Vec<AppConfigDescriptor> {
       schema["properties"]["issuer"]["description"] = json!("OIDC issuer HTTP(S) URL");
       schema["properties"]["allowPrivateNetwork"]["description"] =
         json!("Allow the OIDC issuer origin to resolve to private network addresses");
+      schema["properties"]["trustUnverifiedEmail"]["description"] = json!(
+        "Accept a login when the provider does not publish the email_verified claim at all (an explicit false is still rejected). Enable this for providers such as Synology SSO that never send the claim"
+      );
     } else {
-      for key in ["issuer", "allowPrivateNetwork"] {
+      for key in ["issuer", "allowPrivateNetwork", "trustUnverifiedEmail"] {
         schema["properties"].as_object_mut().expect("OAuth schema properties").remove(key);
         default_value.as_object_mut().expect("OAuth defaults object").remove(key);
       }

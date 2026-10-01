@@ -5,7 +5,8 @@
   },
   "server": {
     "name": "AFFiNE Self-hosted",
-    "externalUrl": "http://localhost:3010"
+    "externalUrl": "http://localhost:3010",
+    "hosts": []
   },
   "copilot": {
     "enabled": true,
@@ -18,5 +19,19 @@
   "indexer": {
     "enabled": true,
     "provider.type": "embedded"
+  },
+  "oauth": {
+    "providers": {
+      "oidc": {
+        "issuer": "https://idp.example.com/webman/sso",
+        "clientId": "",
+        "clientSecret": "",
+        "allowPrivateNetwork": false,
+        "trustUnverifiedEmail": false,
+        "args": {
+          "scope": "openid email"
+        }
+      }
+    }
   }
 }

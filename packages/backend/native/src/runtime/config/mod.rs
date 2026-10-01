@@ -285,6 +285,7 @@ pub(super) struct OAuthProviderConfigFile {
   args: std::collections::BTreeMap<String, String>,
   issuer: String,
   allow_private_network: bool,
+  trust_unverified_email: bool,
 }
 
 #[derive(Default, Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -397,6 +398,7 @@ impl AppConfigFile {
             args,
             issuer: non_empty_string(provider.issuer.clone()),
             allow_private_network: provider.allow_private_network,
+            trust_unverified_email: provider.trust_unverified_email,
             apple_private_key,
             apple_key_id,
             apple_team_id,

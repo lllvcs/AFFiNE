@@ -19,6 +19,12 @@ export type OIDCArgs = {
 export interface OAuthOIDCProviderConfig extends OAuthProviderConfig {
   issuer: string;
   allowPrivateNetwork?: boolean;
+  /**
+   * Accept a login when the provider never publishes the `email_verified` claim
+   * at all (Synology SSO only advertises `aud, email, exp, groups, iat, iss, sub,
+   * username`). An explicit `email_verified: false` is still rejected.
+   */
+  trustUnverifiedEmail?: boolean;
   args?: OIDCArgs;
 }
 
