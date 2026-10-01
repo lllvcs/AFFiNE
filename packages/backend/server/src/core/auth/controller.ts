@@ -7,6 +7,7 @@ import {
   Get,
   Header,
   HttpStatus,
+  Logger,
   Param,
   Post,
   Query,
@@ -64,6 +65,8 @@ type SignInResponse = CurrentUser & {
 @Throttle('strict')
 @Controller('/api/auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly auth: AuthService,
     private readonly sessionIssuer: SessionIssuer,
@@ -391,6 +394,11 @@ export class AuthController {
     response: PreflightResponse
   ): PreflightResponse {
     const { password, magicLink, oauth } = this.auth.signInMethods;
+    // Visible with the default log level, so a deployment can see which value the
+    // server actually resolved instead of inferring it from the login page.
+    this.logger.debug(
+      `sign-in method policy: password=${password} magicLink=${magicLink} oauth=${oauth}`
+    );
     return {
       ...response,
       methods: {
