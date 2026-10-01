@@ -81,9 +81,13 @@ function Room(
   return `${spaceId}:${type}`;
 }
 
-const MIN_BATCH_WS_CLIENT_VERSION = new semver.Range('>=0.27.5-0', {
-  includePrerelease: true,
-});
+const MIN_BATCH_WS_CLIENT_VERSION_RANGE = '>=0.27.5-0';
+const MIN_BATCH_WS_CLIENT_VERSION = new semver.Range(
+  MIN_BATCH_WS_CLIENT_VERSION_RANGE,
+  {
+    includePrerelease: true,
+  }
+);
 const MAX_SPACE_JOIN_BATCH_SIZE = 100;
 
 const SOCKET_PRESENCE_USER_ID_KEY = 'affinePresenceUserId';
@@ -444,7 +448,10 @@ export class SpaceSyncGateway
     }
   }
 
-  private rejectJoin(client: Socket) {
+  private rejectJoin(client: Socket, reason: string) {
+    // The client only sees a socket that opens and closes again, so say why in
+    // the server log - otherwise the reason is invisible everywhere.
+    this.logger.warn(`Rejected WebSocket join ${client.id}: ${reason}`);
     // Give socket.io a chance to flush the ack packet before disconnecting.
     setImmediate(() => client.disconnect());
   }
@@ -1114,7 +1121,10 @@ export class SpaceSyncGateway
   ): Promise<EventResponse<{ clientId: string; success: boolean }>> {
     const { spaces, clientVersion } = parseJoinSpaceBatchMessage(message);
     if (!isBatchWsClientVersion(clientVersion)) {
-      this.rejectJoin(client);
+      this.rejectJoin(
+        client,
+        `client version ${clientVersion || '<empty>'} does not satisfy ${MIN_BATCH_WS_CLIENT_VERSION_RANGE} (batch sync protocol)`
+      );
       return { data: { clientId: client.id, success: false } };
     }
 
