@@ -353,6 +353,14 @@ yarn affine <task>
 后端测试基于 `ava`，需要 PostgreSQL、Redis 和已构建的 native 模块：
 `yarn workspace @affine/server test`。涉及同步协议或认证面的改动**值得配一个真实客户端的验证**，因为它们依赖的东西（socket 房间、权限、客户端版本）无法用单元测试覆盖。
 
+> **native 所有的键存在于两份名单里。** `NATIVE_APP_CONFIG_KEYS`
+> （`packages/backend/native/src/runtime/config/store.rs`）决定 native 运行时存储与校验哪些键；
+> `node_owned()`（`packages/backend/native/src/runtime/config/file.rs`）决定其中哪些**允许 Node 层读取**。
+> 两侧都要消费的键必须**同时**登记在两处；只登记第一处，`config.json` 里写了也对服务端无效——
+> 值被解析、被持有，但从不交付。`auth.signInMethods` 就是这种情况，是那条诊断日志
+> （`sign-in method policy: password=… magicLink=… oauth=…`）让它现形的。
+> 例外是 Node 层通过专用通道消费的键（`crypto.privateKey` 走配置事件、`redis.*` 走 `redis_node_options_json()`）。
+
 ---
 
 ## 8. 上游与许可

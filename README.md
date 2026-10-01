@@ -489,6 +489,19 @@ auth surface deserve a test against a real client, because the pieces they
 interact with (socket rooms, permissions, client versions) cannot be reproduced
 in a unit test.
 
+> **A native-owned key lives in two lists.** `NATIVE_APP_CONFIG_KEYS`
+> (`packages/backend/native/src/runtime/config/store.rs`) decides which keys the
+> native runtime stores and validates, and `node_owned()`
+> (`packages/backend/native/src/runtime/config/file.rs`) decides which of them
+> the Node layer may read. A key that both sides consume must be in **both**;
+> register it only in the first and `config.json` silently has no effect on the
+> server — the value is parsed, held, and never handed over. `auth.signInMethods`
+> was exactly that, and the diagnostic log
+> (`sign-in method policy: password=… magicLink=… oauth=…`) is what made it
+> visible. Keys the Node layer consumes through a dedicated channel
+> (`crypto.privateKey` via config events, `redis.*` via `redis_node_options_json`)
+> are the exception.
+
 ---
 
 ## 8. Upstream and licence
