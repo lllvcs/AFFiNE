@@ -57,6 +57,8 @@ tsconfig.tsbuildinfo
 /*.md
 # Translations of the README are tracked on purpose.
 !/README.zh-CN.md
+# Development notes are tracked on purpose.
+!/DEVELOP_EXPERIMENT.MD
 .codex
 .cursor
 
