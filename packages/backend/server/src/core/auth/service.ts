@@ -80,6 +80,14 @@ export class AuthService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * Which sign-in methods this deployment accepts. Enforced at the HTTP
+   * boundary; the client learns the same flags from the login preflight.
+   */
+  get signInMethods() {
+    return this.config.auth.signInMethods;
+  }
+
   async canSignIn(email: string, req: Request) {
     if (!env.testing) {
       const { ttl, ipLimit, emailLimit } = this.config.auth.signInRateLimit;

@@ -16,6 +16,13 @@
       "allowPrivateEndpoint": true
     }
   },
+  "auth": {
+    "signInMethods": {
+      "password": true,
+      "magicLink": true,
+      "oauth": true
+    }
+  },
   "indexer": {
     "enabled": true,
     "provider.type": "embedded"

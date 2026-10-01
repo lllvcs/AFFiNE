@@ -37,6 +37,9 @@ export class OAuthController {
   @Post('/preflight')
   @HttpCode(HttpStatus.OK)
   async preflight(@Req() req: Request, @Body() body?: unknown) {
+    if (!this.oauth.signInEnabled) {
+      throw new ActionForbidden();
+    }
     const input = OAuthPreflightBodySchema.safeParse(body);
     if (!input.success) {
       const fields = new Set(input.error.issues.map(issue => issue.path[0]));
@@ -85,6 +88,9 @@ export class OAuthController {
     @Res() res: Response,
     @Body() body?: unknown
   ) {
+    if (!this.oauth.signInEnabled) {
+      throw new ActionForbidden();
+    }
     const input = OAuthCallbackBodySchema.safeParse(body);
     if (!input.success) {
       const fields = new Set(input.error.issues.map(issue => issue.path[0]));

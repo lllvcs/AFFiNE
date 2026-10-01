@@ -263,7 +263,8 @@ export function defineNativeModuleConfig<T extends keyof AppConfigSchema>(
           env:
             descriptor.envName &&
             (descriptor.envType === 'string' ||
-              descriptor.envType === 'integer')
+              descriptor.envType === 'integer' ||
+              descriptor.envType === 'boolean')
               ? [descriptor.envName, descriptor.envType]
               : undefined,
           validate: (value: unknown) => {

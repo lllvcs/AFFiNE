@@ -33,7 +33,10 @@ export type NodeConfig = Omit<
 > & {
   auth: Pick<
     AppConfig['auth'],
-    'passwordRequirements' | 'signInRateLimit' | 'trustedCloudflareHeaders'
+    | 'passwordRequirements'
+    | 'signInMethods'
+    | 'signInRateLimit'
+    | 'trustedCloudflareHeaders'
   >;
   copilot: Pick<AppConfig['copilot'], 'exa' | 'unsplash'>;
   db: Pick<AppConfig['db'], 'prisma'>;

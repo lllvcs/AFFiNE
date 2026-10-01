@@ -43,8 +43,17 @@ export class OAuthService {
     private readonly server: ServerService
   ) {}
 
+  /**
+   * Whether OAuth/OIDC sign-in is enabled for this deployment (auth.signInMethods.oauth).
+   * Disabled providers must look absent everywhere: the resolvers stop
+   * advertising them and the endpoints refuse to start a flow.
+   */
+  get signInEnabled() {
+    return this.server.getConfig().auth.signInMethods.oauth;
+  }
+
   get providers() {
-    return this.activeProviders;
+    return this.signInEnabled ? this.activeProviders : [];
   }
 
   @OnEvent('config.init')

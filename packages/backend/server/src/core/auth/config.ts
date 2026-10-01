@@ -18,6 +18,15 @@ export interface AuthConfig {
   allowSignup: boolean;
   allowSignupForOauth: boolean;
   requireEmailDomainVerification: boolean;
+  /**
+   * Which sign-in methods this deployment accepts. All default to enabled; a
+   * "sign in with OIDC only" instance disables password and magicLink.
+   */
+  signInMethods: ConfigItem<{
+    password: boolean;
+    magicLink: boolean;
+    oauth: boolean;
+  }>;
   newAccountActionDelay: number;
   trustedCloudflareHeaders: boolean;
   signInRateLimit: ConfigItem<{
@@ -42,6 +51,17 @@ defineNativeModuleConfig(
   serverNativeModule.appConfigDescriptors('auth'),
   serverNativeModule.validateAppConfigValue,
   {
+    signInMethods: {
+      desc: 'Which sign-in methods are accepted. Disable password and magic link to run an OIDC-only instance.',
+      default: { password: true, magicLink: true, oauth: true },
+      shape: z
+        .object({
+          password: z.boolean(),
+          magicLink: z.boolean(),
+          oauth: z.boolean(),
+        })
+        .strict(),
+    },
     trustedCloudflareHeaders: {
       desc: 'Whether request abuse source facts should trust Cloudflare headers from the origin edge.',
       default: false,

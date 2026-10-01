@@ -229,6 +229,18 @@ fn auth_descriptors() -> Vec<AppConfigDescriptor> {
       "Require email domain verification for restricted resources.",
     ),
     (
+      "signInMethods.password",
+      "Allow signing in with an email address and password.",
+    ),
+    (
+      "signInMethods.magicLink",
+      "Allow signing in through a magic link sent by email.",
+    ),
+    (
+      "signInMethods.oauth",
+      "Allow signing in through the configured OAuth/OIDC providers.",
+    ),
+    (
       "newAccountActionDelay",
       "Minimum account age in seconds for invites and document publishing.",
     ),
@@ -276,8 +288,18 @@ fn auth_descriptors() -> Vec<AppConfigDescriptor> {
       default_value: defaults.pointer(&pointer).expect("auth default field").clone(),
       schema,
       internal: false,
-      env_name: None,
-      env_type: None,
+      env_name: match key {
+        "signInMethods.password" => Some("AFFINE_AUTH_SIGN_IN_PASSWORD".to_string()),
+        "signInMethods.magicLink" => Some("AFFINE_AUTH_SIGN_IN_MAGIC_LINK".to_string()),
+        "signInMethods.oauth" => Some("AFFINE_AUTH_SIGN_IN_OAUTH".to_string()),
+        _ => None,
+      },
+      env_type: match key {
+        "signInMethods.password" | "signInMethods.magicLink" | "signInMethods.oauth" => {
+          Some("boolean".to_string())
+        }
+        _ => None,
+      },
       link: None,
     }
   })

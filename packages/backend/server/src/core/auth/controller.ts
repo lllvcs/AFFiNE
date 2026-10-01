@@ -94,10 +94,12 @@ export class AuthController {
     validators.assertValidEmail(input.data.email);
 
     try {
-      return await this.runtime.executeAuthSessionCommandV1<PreflightResponse>({
-        action: 'login_preflight',
-        email: input.data.email,
-      });
+      const response =
+        await this.runtime.executeAuthSessionCommandV1<PreflightResponse>({
+          action: 'login_preflight',
+          email: input.data.email,
+        });
+      return this.applySignInMethodPolicy(response);
     } catch (error) {
       if (String(error).includes('email_domain_verification_unavailable')) {
         throw new NetworkError();
@@ -132,6 +134,9 @@ export class AuthController {
     }
 
     if (credential.password) {
+      if (!this.auth.signInMethods.password) {
+        throw new ActionForbidden();
+      }
       await this.passwordSignIn(
         req,
         res,
@@ -139,6 +144,9 @@ export class AuthController {
         credential.password
       );
     } else {
+      if (!this.auth.signInMethods.magicLink) {
+        throw new ActionForbidden();
+      }
       await this.sendMagicLink(
         req,
         res,
@@ -348,6 +356,9 @@ export class AuthController {
     @Res() res: Response,
     @Body() body?: unknown
   ) {
+    if (!this.auth.signInMethods.magicLink) {
+      throw new ActionForbidden();
+    }
     const credential = MagicLinkBodySchema.safeParse(body);
     if (!credential.success) throw new EmailTokenNotFound();
     const { email, token: otp, client_nonce: clientNonce } = credential.data;
@@ -370,6 +381,35 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   async currentSessionUser(@CurrentUser() user?: CurrentUser) {
     return { user };
+  }
+
+  /**
+   * A disabled sign-in method must look unavailable to the client, otherwise the
+   * login page offers a method the server will refuse with a 403.
+   */
+  private applySignInMethodPolicy(
+    response: PreflightResponse
+  ): PreflightResponse {
+    const { password, magicLink, oauth } = this.auth.signInMethods;
+    return {
+      ...response,
+      methods: {
+        ...response.methods,
+        password: {
+          ...response.methods.password,
+          available: response.methods.password.available && password,
+        },
+        magicLink: {
+          ...response.methods.magicLink,
+          available: response.methods.magicLink.available && magicLink,
+        },
+        oauth: {
+          ...response.methods.oauth,
+          available: response.methods.oauth.available && oauth,
+          providers: oauth ? response.methods.oauth.providers : [],
+        },
+      },
+    };
   }
 
   private assertSessionMutationAuthorized(

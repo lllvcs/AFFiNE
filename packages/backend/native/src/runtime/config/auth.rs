@@ -10,7 +10,29 @@ pub(super) struct AuthConfigFile {
   pub(super) allow_signup_for_oauth: bool,
   pub(super) require_email_domain_verification: bool,
   pub(super) session: AuthSessionConfigFile,
+  pub(super) sign_in_methods: AuthSignInMethodsConfigFile,
   pub(super) token: AuthTokenConfigFile,
+}
+
+/// Which sign-in methods this deployment accepts. Every method is enabled by
+/// default so an existing deployment keeps its behaviour; a "sign in with OIDC
+/// only" instance is configured by disabling password and magic link.
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct AuthSignInMethodsConfigFile {
+  password: bool,
+  magic_link: bool,
+  oauth: bool,
+}
+
+impl Default for AuthSignInMethodsConfigFile {
+  fn default() -> Self {
+    Self {
+      password: true,
+      magic_link: true,
+      oauth: true,
+    }
+  }
 }
 
 #[derive(Deserialize, Serialize, schemars::JsonSchema)]
@@ -42,6 +64,7 @@ impl Default for AuthConfigFile {
         ttl: runtime.session_ttl_seconds,
         ttr: runtime.session_ttr_seconds,
       },
+      sign_in_methods: AuthSignInMethodsConfigFile::default(),
       token: AuthTokenConfigFile {
         access_token_ttl: runtime.access_token_ttl_seconds,
         refresh_idle_ttl: runtime.refresh_idle_ttl_seconds,

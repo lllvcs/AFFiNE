@@ -197,6 +197,39 @@ Configuration goes into the JSON file passed via `AFFINE_BACKEND_RUNTIME_CONFIG_
   to trust the address when the claim is absent — an explicit
   `email_verified: false` is still rejected. `args.claim_email_verified` remaps
   the claim to a different name when the provider uses one.
+- **Sign-in methods are individually switchable.** `auth.signInMethods.password`,
+  `auth.signInMethods.magicLink` and `auth.signInMethods.oauth` (all default
+  `true`) decide which ways in the server accepts. A disabled method is refused
+  by the API *and* stops being advertised to the client, so the login page no
+  longer offers it. For an OIDC-only instance — the usual reason to run SSO —
+  disable the other two:
+
+```json
+{
+  "auth": {
+    "signInMethods": {
+      "password": false,
+      "magicLink": false,
+      "oauth": true
+    }
+  }
+}
+```
+
+  The same three switches work as environment variables, which is handy for
+  trying a setting out before writing it into `config.json`:
+
+  | Setting | Environment variable |
+  | --- | --- |
+  | `auth.signInMethods.password` | `AFFINE_AUTH_SIGN_IN_PASSWORD` |
+  | `auth.signInMethods.magicLink` | `AFFINE_AUTH_SIGN_IN_MAGIC_LINK` |
+  | `auth.signInMethods.oauth` | `AFFINE_AUTH_SIGN_IN_OAUTH` |
+
+  A boolean environment variable counts as enabled when it is `1` or `true`
+  (case-insensitive) and as disabled otherwise, so set it to `0`/`false` to turn
+  a method off. ⚠️ Lock yourself out with care: before disabling password and
+  magic link, sign in once through OIDC and check that the account has admin
+  access, because afterwards there is no other way in.
 
 ```json
 {
