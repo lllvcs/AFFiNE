@@ -336,7 +336,12 @@ export function getDefaultConfig(
     const modulizedConfig = {};
 
     for (const [key, desc] of Object.entries(defs)) {
-      if (excludedKeys.has(`${module}.${key}`)) {
+      // Native-owned keys are sourced from the native runtime's config (the
+      // config file and the stored overrides) rather than from here. Keys whose
+      // descriptor declares an environment variable are the exception: the
+      // environment seeds them, and the native value still wins because the
+      // caller applies it on top of these defaults.
+      if (excludedKeys.has(`${module}.${key}`) && !desc.env) {
         continue;
       }
       let defaultValue = desc.default;
