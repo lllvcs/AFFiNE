@@ -20,12 +20,13 @@ export interface AuthConfig {
   requireEmailDomainVerification: boolean;
   /**
    * Which sign-in methods this deployment accepts. All default to enabled; a
-   * "sign in with OIDC only" instance disables password and magicLink.
+   * "sign in with OIDC only" instance disables password and magicLink. Fields
+   * may be omitted in config.json, so they are optional here too.
    */
   signInMethods: ConfigItem<{
-    password: boolean;
-    magicLink: boolean;
-    oauth: boolean;
+    password?: boolean;
+    magicLink?: boolean;
+    oauth?: boolean;
   }>;
   newAccountActionDelay: number;
   trustedCloudflareHeaders: boolean;
@@ -54,11 +55,15 @@ defineNativeModuleConfig(
     signInMethods: {
       desc: 'Which sign-in methods are accepted. Disable password and magic link to run an OIDC-only instance.',
       default: { password: true, magicLink: true, oauth: true },
+      // The fields are optional so a partial object in config.json
+      // ({"password": false}) validates like the native schema, which fills the
+      // missing fields from Default; AuthService.signInMethods normalises them
+      // back to a full object.
       shape: z
         .object({
-          password: z.boolean(),
-          magicLink: z.boolean(),
-          oauth: z.boolean(),
+          password: z.boolean().optional(),
+          magicLink: z.boolean().optional(),
+          oauth: z.boolean().optional(),
         })
         .strict(),
     },

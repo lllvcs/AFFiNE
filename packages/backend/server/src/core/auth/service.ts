@@ -83,9 +83,20 @@ export class AuthService implements OnApplicationBootstrap {
   /**
    * Which sign-in methods this deployment accepts. Enforced at the HTTP
    * boundary; the client learns the same flags from the login preflight.
+   * Missing fields mean "enabled", mirroring the native schema's Default, so a
+   * partial object in config.json only has to name the methods being turned off.
    */
-  get signInMethods() {
-    return this.config.auth.signInMethods;
+  get signInMethods(): {
+    password: boolean;
+    magicLink: boolean;
+    oauth: boolean;
+  } {
+    const methods = this.config.auth.signInMethods ?? {};
+    return {
+      password: methods.password ?? true,
+      magicLink: methods.magicLink ?? true,
+      oauth: methods.oauth ?? true,
+    };
   }
 
   async canSignIn(email: string, req: Request) {
