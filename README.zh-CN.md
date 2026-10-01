@@ -246,6 +246,8 @@ console.log(JSON.stringify({crypto:{privateKey:privateKey.export({format:'pem',t
 
 `server.hosts` **没有**环境变量，只能写在 `config.json` 里。你在别的 compose 文件里见过的某些环境变量（例如 `AFFINE_INDEXER_ENABLED`）在这份代码里**没有接线**，请改在 `config.json` 中设置对应键。
 
+上面的布尔开关：值为 `1` 或 `true`（不分大小写）表示启用，其它值表示关闭。若同一开关也在 `config.json` 里出现，**以文件为准**——环境变量只填充文件未设置的值。
+
 ### 3.3 仅 OIDC 登录
 
 如果你跑 SSO 的目的就是不要本地密码、不要魔法链接：

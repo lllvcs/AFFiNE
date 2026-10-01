@@ -330,6 +330,10 @@ want magic-link email.
 compose files (for example `AFFINE_INDEXER_ENABLED`) are not wired to anything
 in this codebase; configure those keys in `config.json` instead.
 
+For the boolean switches above, `1`/`true` (case-insensitive) means enabled and
+anything else means disabled. If a switch is also present in `config.json`, the
+file wins — the environment only fills in values the file does not set.
+
 ### 3.3 OIDC-only instance
 
 The usual reason to run SSO at all: no local passwords, no magic links, one
