@@ -72,7 +72,17 @@ type EventResponse<Data = any> = Data extends never
       data: Data;
     };
 
-type RoomType = 'sync' | 'sync-027';
+// sync: shared room for space membership checks and non-protocol broadcasts.
+// sync-025: legacy 0.25 doc sync protocol (space:broadcast-doc-update).
+// sync-026: legacy 0.26/0.27 doc sync protocol (space:broadcast-doc-updates).
+// sync-027: batch doc sync protocol, requires a client that speaks
+//           space:join-batch (see MIN_BATCH_WS_CLIENT_VERSION).
+type RoomType =
+  | 'sync'
+  | 'sync-025'
+  | 'sync-026'
+  | 'sync-027'
+  | `${string}:awareness`;
 
 function Room(
   spaceId: string,
@@ -80,6 +90,18 @@ function Room(
 ): `${string}:${RoomType}` {
   return `${spaceId}:${type}`;
 }
+
+// Legacy clients (the released 0.27.4 desktop app, the 0.27.1 mobile app) never
+// learned the batch protocol: they join with space:join and receive doc updates
+// from the sync-025/sync-026 rooms. Keep serving them so a self-hosted server
+// does not lock out every client that is not on the very latest release.
+const MIN_WS_CLIENT_VERSION_RANGE = '>=0.25.0';
+const MIN_WS_CLIENT_VERSION = new semver.Range(MIN_WS_CLIENT_VERSION_RANGE, {
+  includePrerelease: true,
+});
+const DOC_UPDATES_PROTOCOL_026 = new semver.Range('>=0.26.0-0', {
+  includePrerelease: true,
+});
 
 const MIN_BATCH_WS_CLIENT_VERSION_RANGE = '>=0.27.5-0';
 const MIN_BATCH_WS_CLIENT_VERSION = new semver.Range(
@@ -89,6 +111,8 @@ const MIN_BATCH_WS_CLIENT_VERSION = new semver.Range(
   }
 );
 const MAX_SPACE_JOIN_BATCH_SIZE = 100;
+
+type SyncProtocolRoomType = Extract<RoomType, 'sync-025' | 'sync-026'>;
 
 const SOCKET_PRESENCE_USER_ID_KEY = 'affinePresenceUserId';
 
@@ -108,6 +132,24 @@ function normalizeWsClientVersion(clientVersion: string): string | null {
 function isBatchWsClientVersion(clientVersion: string): boolean {
   const normalized = normalizeWsClientVersion(clientVersion);
   return Boolean(normalized && MIN_BATCH_WS_CLIENT_VERSION.test(normalized));
+}
+
+function isSupportedWsClientVersion(clientVersion: string): boolean {
+  const normalized = normalizeWsClientVersion(clientVersion);
+  if (!normalized) {
+    return false;
+  }
+
+  return Boolean(
+    semver.valid(normalized) && MIN_WS_CLIENT_VERSION.test(normalized)
+  );
+}
+
+function getSyncProtocolRoomType(clientVersion: string): SyncProtocolRoomType {
+  const normalized = normalizeWsClientVersion(clientVersion);
+  return DOC_UPDATES_PROTOCOL_026.test(normalized ?? clientVersion)
+    ? 'sync-026'
+    : 'sync-025';
 }
 
 enum SpaceType {
@@ -133,6 +175,34 @@ interface LeaveSpaceMessage {
 
 interface LeaveSpaceBatchMessage extends LeaveSpaceMessage {
   docIds: string[];
+}
+
+interface JoinSpaceMessage {
+  spaceType: SpaceType;
+  spaceId: string;
+  clientVersion: string;
+}
+
+interface JoinSpaceAwarenessMessage {
+  spaceType: SpaceType;
+  spaceId: string;
+  docId: string;
+  clientVersion: string;
+}
+
+interface LeaveSpaceAwarenessMessage {
+  spaceType: SpaceType;
+  spaceId: string;
+  docId: string;
+}
+
+interface BroadcastDocUpdateMessage {
+  spaceType: SpaceType;
+  spaceId: string;
+  docId: string;
+  update: string;
+  timestamp: number;
+  editor: string;
 }
 
 interface PushDocUpdateMessage {
@@ -325,6 +395,81 @@ function parseLeaveSpaceBatchMessage(message: unknown): LeaveSpaceBatchMessage {
     spaceType,
     spaceId,
     docIds: docIds.map(docId => canonicalDocId(docId, spaceId)),
+  };
+}
+
+function parseSpaceType(value: unknown): SpaceType {
+  if (value !== SpaceType.Userspace && value !== SpaceType.Workspace) {
+    throw new BadRequest('Invalid space type.');
+  }
+  return value;
+}
+
+function parseSpaceId(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new BadRequest('Invalid space id.');
+  }
+  return value;
+}
+
+function readClientVersion(value: unknown): string {
+  // Legacy clients are rejected through isSupportedWsClientVersion, not with a
+  // protocol error, so a missing version stays diagnosable in the log.
+  return typeof value === 'string' ? value : '';
+}
+
+function parseJoinSpaceMessage(message: unknown): JoinSpaceMessage {
+  if (!isRecord(message)) {
+    throw new BadRequest('Invalid space join payload.');
+  }
+
+  const spaceType = parseSpaceType(message.spaceType);
+  const spaceId = parseSpaceId(message.spaceId);
+  return {
+    spaceType,
+    spaceId,
+    clientVersion: readClientVersion(message.clientVersion),
+  };
+}
+
+function parseJoinSpaceAwarenessMessage(
+  message: unknown
+): JoinSpaceAwarenessMessage {
+  if (!isRecord(message)) {
+    throw new BadRequest('Invalid space join awareness payload.');
+  }
+
+  const spaceType = parseSpaceType(message.spaceType);
+  const spaceId = parseSpaceId(message.spaceId);
+  if (typeof message.docId !== 'string' || message.docId.trim().length === 0) {
+    throw new BadRequest('Invalid space join awareness payload.');
+  }
+
+  return {
+    spaceType,
+    spaceId,
+    docId: canonicalDocId(message.docId, spaceId),
+    clientVersion: readClientVersion(message.clientVersion),
+  };
+}
+
+function parseLeaveSpaceAwarenessMessage(
+  message: unknown
+): LeaveSpaceAwarenessMessage {
+  if (!isRecord(message)) {
+    throw new BadRequest('Invalid space leave awareness payload.');
+  }
+
+  const spaceType = parseSpaceType(message.spaceType);
+  const spaceId = parseSpaceId(message.spaceId);
+  if (typeof message.docId !== 'string' || message.docId.trim().length === 0) {
+    throw new BadRequest('Invalid space leave awareness payload.');
+  }
+
+  return {
+    spaceType,
+    spaceId,
+    docId: canonicalDocId(message.docId, spaceId),
   };
 }
 
@@ -656,6 +801,73 @@ export class SpaceSyncGateway
         socket.emit('space:broadcast-doc-updates', activeBroadcastPayload);
       }
     }
+  }
+
+  private legacyProtocolRoom(
+    spaceType: SpaceType,
+    spaceId: string,
+    roomType: SyncProtocolRoomType
+  ) {
+    return `${spaceType}:${Room(spaceId, roomType)}`;
+  }
+
+  private legacyAwarenessRoom(
+    spaceType: SpaceType,
+    spaceId: string,
+    docId: string
+  ) {
+    return `${spaceType}:${Room(spaceId, `${docId}:awareness`)}`;
+  }
+
+  /**
+   * A client that joined through the legacy `space:join` handshake lives in the
+   * sync-025/sync-026 rooms instead of the in-memory per-doc subscriptions the
+   * batch protocol uses. Its access is checked per request instead (see
+   * assertDocActionAllowed), which is what released clients expect.
+   */
+  private isLegacySyncClient(
+    client: Socket,
+    spaceType: SpaceType,
+    spaceId: string
+  ) {
+    return (
+      client.rooms.has(
+        this.legacyProtocolRoom(spaceType, spaceId, 'sync-025')
+      ) ||
+      client.rooms.has(this.legacyProtocolRoom(spaceType, spaceId, 'sync-026'))
+    );
+  }
+
+  private emitLegacyDocUpdateBroadcasts(
+    payload: SyncDocUpdatesPayload,
+    broadcastPayload: BroadcastDocUpdatesMessage
+  ) {
+    if (!this.server) {
+      return;
+    }
+
+    const room025 = this.legacyProtocolRoom(
+      payload.spaceType,
+      payload.spaceId,
+      'sync-025'
+    );
+    for (const update of this.encodeUpdates(payload.updates)) {
+      this.server.to(room025).emit('space:broadcast-doc-update', {
+        spaceType: payload.spaceType,
+        spaceId: payload.spaceId,
+        docId: payload.docId,
+        update,
+        timestamp: payload.timestamp,
+        editor: payload.editor ?? '',
+      } satisfies BroadcastDocUpdateMessage);
+    }
+
+    const room026 = this.legacyProtocolRoom(
+      payload.spaceType,
+      payload.spaceId,
+      'sync-026'
+    );
+    this.server.to(room026).emit('space:broadcast-doc-updates', broadcastPayload);
   }
 
   private emitActiveAwarenessCollect(event: SyncAwarenessEvent) {
@@ -1081,6 +1293,7 @@ export class SpaceSyncGateway
     }
 
     this.emitActiveDocUpdate(payload, sourceSocket?.id, broadcastPayload);
+    this.emitLegacyDocUpdateBroadcasts(payload, broadcastPayload);
     metrics.socketio
       .counter('doc_updates_broadcast')
       .add(broadcastPayload.updates.length, {
@@ -1111,6 +1324,112 @@ export class SpaceSyncGateway
     }
 
     return adapters[spaceType];
+  }
+
+  /**
+   * Legacy join handshake used by every released client up to 0.27.4 (desktop)
+   * and 0.27.1 (mobile). They receive doc updates from the sync-025/sync-026
+   * rooms, so membership in one of those rooms also marks the socket as a
+   * legacy sync client for the per-request permission fallbacks below.
+   */
+  @SubscribeMessage('space:join')
+  async onJoinSpace(
+    @CurrentUser() user: CurrentUser,
+    @ConnectedSocket() client: Socket,
+    @MessageBody() message: unknown
+  ): Promise<EventResponse<{ clientId: string; success: boolean }>> {
+    const { spaceType, spaceId, clientVersion } = parseJoinSpaceMessage(message);
+    if (!isSupportedWsClientVersion(clientVersion)) {
+      this.rejectJoin(
+        client,
+        `legacy client version ${clientVersion || '<missing>'} does not satisfy ${MIN_WS_CLIENT_VERSION_RANGE}`
+      );
+      return { data: { clientId: client.id, success: false } };
+    }
+
+    const adapter = this.selectAdapter(client, spaceType);
+    await adapter.assertAccessible(spaceId, user.id, 'Workspace.Sync');
+
+    const protocolRoomType = getSyncProtocolRoomType(clientVersion);
+    const protocolRoom = this.legacyProtocolRoom(
+      spaceType,
+      spaceId,
+      protocolRoomType
+    );
+    const staleProtocolRoom = this.legacyProtocolRoom(
+      spaceType,
+      spaceId,
+      protocolRoomType === 'sync-025' ? 'sync-026' : 'sync-025'
+    );
+    const roomsToJoin = [adapter.room(spaceId), protocolRoom].filter(
+      room => !client.rooms.has(room)
+    );
+    if (roomsToJoin.length > 0) {
+      await client.join(roomsToJoin);
+    }
+    if (client.rooms.has(staleProtocolRoom)) {
+      await client.leave(staleProtocolRoom);
+    }
+
+    this.logger.debug(
+      `Legacy sync join accepted: client=${client.id} version=${clientVersion} space=${spaceType}:${spaceId} protocol=${protocolRoomType}`
+    );
+
+    return { data: { clientId: client.id, success: true } };
+  }
+
+  @SubscribeMessage('space:join-awareness')
+  async onJoinAwareness(
+    @CurrentUser() user: CurrentUser,
+    @ConnectedSocket() client: Socket,
+    @MessageBody() message: unknown
+  ): Promise<EventResponse<{ clientId: string; success: boolean }>> {
+    const { spaceType, spaceId, docId, clientVersion } =
+      parseJoinSpaceAwarenessMessage(message);
+    if (!isSupportedWsClientVersion(clientVersion)) {
+      this.rejectJoin(
+        client,
+        `legacy client version ${clientVersion || '<missing>'} does not satisfy ${MIN_WS_CLIENT_VERSION_RANGE}`
+      );
+      return { data: { clientId: client.id, success: false } };
+    }
+
+    this.assertReservedDocSubject(spaceType, user.id, spaceId, docId);
+    await this.assertDocActionAllowed(
+      spaceType,
+      user.id,
+      spaceId,
+      docId,
+      'Doc.Read'
+    );
+
+    // 0.27.4 joined the awareness room without requiring the space room first,
+    // so keep that order tolerance: the permission check above is the gate.
+    if (!this.isLegacySyncClient(client, spaceType, spaceId)) {
+      this.selectAdapter(client, spaceType).assertIn(spaceId);
+    }
+
+    const room = this.legacyAwarenessRoom(spaceType, spaceId, docId);
+    if (!client.rooms.has(room)) {
+      await client.join(room);
+    }
+
+    return { data: { clientId: client.id, success: true } };
+  }
+
+  @SubscribeMessage('space:leave-awareness')
+  async onLeaveAwareness(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() message: unknown
+  ): Promise<EventResponse<{ clientId: string; success: boolean }>> {
+    const { spaceType, spaceId, docId } =
+      parseLeaveSpaceAwarenessMessage(message);
+    const room = this.legacyAwarenessRoom(spaceType, spaceId, docId);
+    if (client.rooms.has(room)) {
+      await client.leave(room);
+    }
+
+    return { data: { clientId: client.id, success: true } };
   }
 
   @SubscribeMessage('space:join-batch')
@@ -1284,6 +1603,8 @@ export class SpaceSyncGateway
     this.removeActiveDocSubscriptionsInSpace(client, spaceType, spaceId);
     await adapter.leave(spaceId);
     await adapter.leave(spaceId, 'sync-027');
+    await adapter.leave(spaceId, 'sync-026');
+    await adapter.leave(spaceId, 'sync-025');
 
     return { data: { clientId: client.id, success: true } };
   }
@@ -1302,23 +1623,39 @@ export class SpaceSyncGateway
     adapter.assertIn(spaceId);
     this.assertReservedDocSubject(spaceType, user.id, spaceId, canonicalId);
     if (
-      !this.hasActiveDocSubscription(client, spaceType, spaceId, canonicalId)
+      this.hasActiveDocSubscription(client, spaceType, spaceId, canonicalId)
     ) {
-      throw new NotInSpace({ spaceId });
-    }
-    const permissionGeneration = this.activeDocGeneration(
-      client,
-      spaceType,
-      spaceId,
-      canonicalId
-    );
-    if (
-      permissionGeneration === undefined ||
-      (spaceType === SpaceType.Workspace &&
-        permissionGeneration !==
-          (await this.runtime.getSyncPermissionGenerationV1(spaceId)))
-    ) {
-      this.removeActiveDocSubscription(client, spaceType, spaceId, canonicalId);
+      const permissionGeneration = this.activeDocGeneration(
+        client,
+        spaceType,
+        spaceId,
+        canonicalId
+      );
+      if (
+        permissionGeneration === undefined ||
+        (spaceType === SpaceType.Workspace &&
+          permissionGeneration !==
+            (await this.runtime.getSyncPermissionGenerationV1(spaceId)))
+      ) {
+        this.removeActiveDocSubscription(
+          client,
+          spaceType,
+          spaceId,
+          canonicalId
+        );
+        throw new NotInSpace({ spaceId });
+      }
+    } else if (this.isLegacySyncClient(client, spaceType, spaceId)) {
+      // Legacy sockets live in the sync-025/sync-026 rooms and are authorized
+      // per request, exactly like 0.27.4 did.
+      await this.assertDocActionAllowed(
+        spaceType,
+        user.id,
+        spaceId,
+        canonicalId,
+        'Doc.Read'
+      );
+    } else {
       throw new NotInSpace({ spaceId });
     }
 
@@ -1460,21 +1797,43 @@ export class SpaceSyncGateway
       spaceId,
       docId
     );
-    if (!active) {
-      throw new NotInSpace({ spaceId });
-    }
-    if (
-      !this.hasActiveDocAction(client, spaceType, spaceId, docId, 'Doc.Update')
-    ) {
-      throw new DocActionDenied({ action: 'Doc.Update', docId, spaceId });
-    }
-    const permissionGeneration = this.activeDocGeneration(
-      client,
-      spaceType,
-      spaceId,
-      docId
-    );
-    if (permissionGeneration === undefined) {
+    let permissionGeneration: number | undefined;
+    if (active) {
+      if (
+        !this.hasActiveDocAction(
+          client,
+          spaceType,
+          spaceId,
+          docId,
+          'Doc.Update'
+        )
+      ) {
+        throw new DocActionDenied({ action: 'Doc.Update', docId, spaceId });
+      }
+      permissionGeneration = this.activeDocGeneration(
+        client,
+        spaceType,
+        spaceId,
+        docId
+      );
+      if (permissionGeneration === undefined) {
+        throw new NotInSpace({ spaceId });
+      }
+    } else if (this.isLegacySyncClient(client, spaceType, spaceId)) {
+      // Legacy sockets are authorized per request; the generation guard the
+      // batch protocol uses for subscriptions does not apply to them.
+      await this.assertDocActionAllowed(
+        spaceType,
+        user.id,
+        spaceId,
+        docId,
+        'Doc.Update'
+      );
+      permissionGeneration =
+        spaceType === SpaceType.Workspace
+          ? await this.runtime.getSyncPermissionGenerationV1(spaceId)
+          : 0;
+    } else {
       throw new NotInSpace({ spaceId });
     }
     const canonicalRoot =
@@ -1577,10 +1936,19 @@ export class SpaceSyncGateway
     const docId = canonicalDocId(message.docId, spaceId);
     const adapter = this.selectAdapter(client, spaceType);
 
-    if (!this.hasActiveDocSubscription(client, spaceType, spaceId, docId)) {
+    const legacy = this.isLegacySyncClient(client, spaceType, spaceId);
+    if (
+      !this.hasActiveDocSubscription(client, spaceType, spaceId, docId) &&
+      !legacy
+    ) {
       throw new NotInSpace({ spaceId });
     }
     adapter.assertIn(spaceId);
+    if (legacy) {
+      client
+        .to(this.legacyAwarenessRoom(spaceType, spaceId, docId))
+        .emit('space:collect-awareness', { spaceType, spaceId, docId });
+    }
     const event = { spaceType, spaceId, docId, sourceSocketId: client.id };
     this.emitActiveAwarenessCollect(event);
     this.event.broadcast('sync.awareness.collect', event);
@@ -1597,11 +1965,21 @@ export class SpaceSyncGateway
     const docId = canonicalDocId(message.docId, spaceId);
     const adapter = this.selectAdapter(client, spaceType);
 
-    if (!this.hasActiveDocSubscription(client, spaceType, spaceId, docId)) {
+    const legacy = this.isLegacySyncClient(client, spaceType, spaceId);
+    if (
+      !this.hasActiveDocSubscription(client, spaceType, spaceId, docId) &&
+      !legacy
+    ) {
       throw new NotInSpace({ spaceId });
     }
     adapter.assertIn(spaceId);
-    const event = { ...message, docId, sourceSocketId: client.id };
+    const awarenessMessage = { ...message, docId };
+    if (legacy) {
+      client
+        .to(this.legacyAwarenessRoom(spaceType, spaceId, docId))
+        .emit('space:broadcast-awareness-update', awarenessMessage);
+    }
+    const event = { ...awarenessMessage, sourceSocketId: client.id };
     this.emitActiveAwarenessUpdate(event);
     this.event.broadcast('sync.awareness.updated', event);
 
