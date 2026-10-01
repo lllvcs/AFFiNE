@@ -82,7 +82,10 @@ export class URLHelper {
       return this.origin;
     }
 
-    return this.convertHostToOrigin(requestHost);
+    return this.convertHostToOrigin(
+      requestHost,
+      this.requestProtocol(requestHost)
+    );
   }
 
   get requestBaseUrl() {
@@ -178,9 +181,43 @@ export class URLHelper {
     }
   }
 
-  private convertHostToOrigin(host: string) {
+  /**
+   * The scheme of a generated URL must follow how the client reached the
+   * server, not how the server itself listens: a self-hosted instance behind a
+   * TLS proxy with `server.https: false` used to hand OIDC an `http://…`
+   * redirect_uri that the provider would reject or downgrade.
+   */
+  private requestProtocol(requestHost: string): 'http' | 'https' {
+    // server.externalUrl is administrator-configured and cannot be influenced
+    // by a client, so its scheme always wins for its own host.
+    if (this.config.server.externalUrl) {
+      try {
+        const externalUrl = new URL(this.config.server.externalUrl);
+        if (externalUrl.hostname === requestHost) {
+          return externalUrl.protocol === 'https:' ? 'https' : 'http';
+        }
+      } catch {
+        // validated in init()
+      }
+    }
+
+    // Otherwise the request decides, and only for a host the administrator
+    // listed in server.hosts (requestOrigin checks that before calling us).
+    const requestProtocol = this.cls?.get<string | undefined>(
+      CLS_REQUEST_PROTOCOL
+    );
+    if (requestProtocol === 'https' || requestProtocol === 'http') {
+      return requestProtocol;
+    }
+
+    // No request context at all (background jobs, websocket-driven work):
+    // keep the scheme the deployment was configured with.
+    return this.config.server.https ? 'https' : 'http';
+  }
+
+  private convertHostToOrigin(host: string, protocol?: 'http' | 'https') {
     return [
-      this.config.server.https ? 'https' : 'http',
+      protocol ?? (this.config.server.https ? 'https' : 'http'),
       '://',
       host,
       host === 'localhost' || isIP(host) ? `:${this.config.server.port}` : '',

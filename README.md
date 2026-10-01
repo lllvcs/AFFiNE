@@ -62,6 +62,17 @@ error reasons are now specific (`missing_id_token`, `missing_email_verified_clai
 `missing_email`, `id_token_*`) instead of one opaque string. Three Rust unit tests
 cover it (`42bbe52`).
 
+The **`redirect_uri` follows the request** rather than `server.https` alone. The
+scheme of `server.externalUrl` wins for its own host (it is administrator
+configured and cannot be influenced by a client); for any other host the scheme
+the client actually used is taken from `x-forwarded-proto`, falling back to
+`server.https` when there is no request context — and only hosts listed in
+`server.hosts` are considered. A self-hosted instance whose TLS terminates in a
+proxy can therefore keep `server.https: false` (plain HTTP inside the LAN, no
+certificate needed there) while OIDC callbacks stay on `https://`, which is also
+what `trust proxy` must not be enabled for: that setting would additionally let
+every client claim its own address for the sign-in rate limit.
+
 ### 1.4 Realtime sync works with released clients
 
 AFFiNE 0.27.5 replaced the room-based sync protocol with `space:join-batch` and

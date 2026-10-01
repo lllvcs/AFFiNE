@@ -17,6 +17,8 @@ declare global {
     var CUSTOM_CONFIG_PATH: string;
     // oxlint-disable-next-line no-var
     var CLS_REQUEST_HOST: 'CLS_REQUEST_HOST';
+    // oxlint-disable-next-line no-var
+    var CLS_REQUEST_PROTOCOL: 'CLS_REQUEST_PROTOCOL';
   }
 }
 
@@ -67,6 +69,7 @@ export type AppEnv = {
 };
 
 globalThis.CLS_REQUEST_HOST = 'CLS_REQUEST_HOST';
+globalThis.CLS_REQUEST_PROTOCOL = 'CLS_REQUEST_PROTOCOL';
 globalThis.CUSTOM_CONFIG_PATH = join(homedir(), '.affine/config');
 globalThis.readEnv = function readEnv<T>(
   env: string,

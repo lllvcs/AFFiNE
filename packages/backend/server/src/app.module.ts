@@ -82,6 +82,22 @@ export const FunctionalityModules = [
       setup(cls, req: Request, res: Response) {
         res.setHeader('X-Request-Id', cls.getId());
         cls.set(CLS_REQUEST_HOST, req.hostname);
+        // Express only reads x-forwarded-proto when `trust proxy` is enabled,
+        // and enabling that would also let every client claim its own address
+        // for the sign-in rate limit. Read the header here instead: it only
+        // decides the scheme of generated URLs, and URLHelper still checks the
+        // host against server.hosts / server.externalUrl before using it.
+        const forwarded = req.headers['x-forwarded-proto'];
+        const headerValue = (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+          ?.split(',')[0]
+          ?.trim()
+          .toLowerCase();
+        let protocol: 'http' | 'https' =
+          req.protocol === 'https' ? 'https' : 'http';
+        if (headerValue === 'https' || headerValue === 'http') {
+          protocol = headerValue;
+        }
+        cls.set(CLS_REQUEST_PROTOCOL, protocol);
       },
     },
     // for websocket connection

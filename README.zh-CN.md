@@ -32,6 +32,8 @@
 
 `oauth.providers.oidc.trustUnverifiedEmail`（默认 `false`，失败即关闭）在**该 claim 完全缺失**时信任邮箱地址；显式 `email_verified: false` 仍然拒绝，`args.claim_email_verified` 可以重映射 claim 名。同时 OAuth 的错误原因细化了（`missing_id_token`、`missing_email_verified_claim`、`email_not_verified`、`userinfo_subject_mismatch`、`missing_subject`、`missing_email`、`id_token_*`），不再是一句笼统的话。附 3 个 Rust 单元测试（`42bbe52`）。
 
+**`redirect_uri` 现在跟随请求**，而不是只看 `server.https`：当请求主机与 `server.externalUrl` 的主机一致时，用 externalUrl 的协议（它由管理员配置，客户端无法影响）；其它主机则用客户端**实际使用的协议**（取自 `x-forwarded-proto`），没有请求上下文时回退到 `server.https`——并且只对 `server.hosts` 里列出的主机生效。这样 TLS 终止在反代上的实例可以保持 `server.https: false`（内网走明文 HTTP、不必在内网配证书），而 OIDC 回调仍然是 `https://`。这也是**不能**打开 `trust proxy` 的原因：那会让每个客户端自行申报来源地址，从而绕过登录限流。
+
 ### 1.4 实时同步兼容已发布客户端
 
 AFFiNE 0.27.5 用 `space:join-batch` 取代了基于房间的同步协议，并**删除了旧握手**。后果很实在：用这份源码构建的服务端会拒绝所有已发布的客户端——0.27.4 桌面版、0.27.1 手机版——表现为 WebSocket 连上就断、完全无法同步，工作区根文档永远推不上去（在新建工作区上表现为 `DOC_NOT_FOUND`）。
