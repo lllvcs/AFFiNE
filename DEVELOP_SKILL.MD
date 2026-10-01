@@ -1,10 +1,15 @@
-# AFFiNE self-hosted fork — development notes
+---
+name: affine-selfhosted-fork
+description: Use when developing on the AFFiNE self-hosted fork (config, auth, sync, image pipeline) or when a self-hosted setting "does not work". Rules with their reason and verification step; the incident history lives in DEVELOP_EXPERIMENT.MD.
+---
+
+# AFFiNE self-hosted fork — development rules (agent-facing)
 
 > **When to use this file.** Before changing configuration, auth, sync or the
 > image pipeline in this fork; and when a setting "does not work" in a
 > self-hosted deployment. Deployment and configuration *usage* live in
-> [`README.md`](./README.md); this file is the working knowledge — what was
-> changed, what the contracts are, and which mistakes already cost time.
+> [`README.md`](./README.md); the incident record behind these rules lives in
+> [`DEVELOP_EXPERIMENT.MD`](./DEVELOP_EXPERIMENT.MD).
 >
 > Written as rules: **do X → because Y → verify with Z.** Each one is
 > self-contained; read the rule you need, not the file.
