@@ -182,9 +182,15 @@ Configuration goes into the JSON file passed via `AFFINE_BACKEND_RUNTIME_CONFIG_
 
 - **`server.externalUrl` must be the URL you actually open the app with.** The
   CORS/origin allowlist is derived from it, so a mismatch makes every client
-  request log `Blocked CORS request from origin: …` and breaks the desktop client
-  and any second entry point (Tailscale IP, LAN IP, reverse-proxied domain).
-  Use `server.hosts: [...]` for additional entry points.
+  request log `Blocked CORS request from origin: …` / `Blocked WebSocket CORS
+  request from origin: …` and breaks realtime sync, the desktop client and any
+  second entry point (Tailscale IP, LAN IP, reverse-proxied domain).
+- **`server.hosts` takes bare hosts, not URLs.** The scheme comes from
+  `server.https` (`false` → `http`), and the port is appended automatically only
+  for `localhost` and bare IPs — include the port yourself for hostnames. So for
+  a plain-HTTP instance reachable on `http://100.111.1.1:3010` and
+  `http://nas.local:3010` with an HTTPS domain in `externalUrl`:
+  `"https": false, "hosts": ["100.111.1.1", "nas.local:3010"]`.
 - **OIDC providers that never publish `email_verified`** (Synology SSO only
   advertises `aud, email, exp, groups, iat, iss, sub, username`) are rejected by
   the default strict check. Set `oauth.providers.oidc.trustUnverifiedEmail: true`
@@ -196,7 +202,8 @@ Configuration goes into the JSON file passed via `AFFINE_BACKEND_RUNTIME_CONFIG_
 {
   "server": {
     "externalUrl": "https://note.example.com",
-    "hosts": ["http://192.168.1.10:3010"]
+    "https": false,
+    "hosts": ["192.168.1.10", "nas.local:3010"]
   },
   "oauth": {
     "providers": {
