@@ -12,8 +12,14 @@
 
 - Baseline: upstream AFFiNE source at version `0.27.5`, branch `canary`
 - Images: `ghcr.io/lllvcs/affine` (built) → `lvcs/affine` (published)
-- This machine has no docker and no old clients: protocol and end-to-end
-  behaviour can only be verified on the deployment instance.
+- Docker **is** available here, inside WSL: `wsl -d Ubuntu-24.04 -e docker …`
+  (user `lvcs`, Docker 29.x, compose v5). A published container port is reachable
+  from Windows on `localhost`, so the database-backed native tests and the Prisma
+  migrations can be run for real — see §4. Still missing: a released 0.27.4
+  desktop / 0.27.1 mobile client, so protocol compatibility remains
+  instance-only.
+- Correction: this file used to say "no docker on this machine", which was wrong
+  and cost two rounds of avoidable guessing about `profiles=0`.
 
 ---
 
@@ -238,12 +244,36 @@ still make the requirement binding.
 ## 4. Verification manual
 
 ```sh
+# A throwaway database, from Windows (docker lives in WSL; localhost works):
+wsl -d Ubuntu-24.04 -e docker run -d --name affine-pg -p 5433:5432 \
+  -e POSTGRES_USER=affine -e POSTGRES_PASSWORD=affine -e POSTGRES_DB=affine \
+  -e POSTGRES_HOST_AUTH_METHOD=trust pgvector/pgvector:pg16
+
+# The real schema, straight from this checkout:
+cd packages/backend/server
+DATABASE_URL=postgresql://affine@localhost:5433/affine \
+  ../../node_modules/.bin/prisma migrate deploy --schema schema.prisma
+
 # Rust (native layer) — cargo may not be on PATH
 CARGO_HOME=E:/AFFiNE/.cargo RUSTUP_HOME=$HOME/.rustup \
   CARGO_TARGET_DIR=E:/AFFiNE/.scratch/target \
   $HOME/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/cargo.exe \
   check -p affine_server_native --lib
+```
 
+The database-backed native tests **skip silently** when `DATABASE_URL` is unset
+(they `return Ok(())`), so an unset variable looks exactly like a pass. With the
+container above:
+
+```sh
+DATABASE_URL=postgresql://affine@localhost:5433/affine \
+  cargo.exe test -p affine_server_native --lib -- --nocapture --test-threads=1
+```
+
+`--nocapture` is the point: the copilot diagnostics are `eprintln!` lines, and
+reading them next to the result is how the routing reasons get verified.
+
+```sh
 # TypeScript (server layer)
 node_modules/.bin/tsc -p packages/backend/server/tsconfig.json --noEmit
 node node_modules/oxlint/bin/oxlint <changed files>
@@ -273,7 +303,9 @@ Traps that produced wrong conclusions here:
    compiled (one hit = in the program).
 3. `grep -c` on a minified bundle counts lines, not occurrences.
 4. Windows filesystems are case-insensitive: `rm NAME.MD` deletes `NAME.md`.
-5. Without docker there is no local end-to-end: state that explicitly.
+5. Do not claim "no docker here": it is in WSL (see the baseline note). Name the
+   category that is actually unverifiable instead — a released client, a real
+   provider account, a browser on the deployment.
 6. `tsc -p <package>` alone resolves cross-package imports through the referenced
    projects' **stale `dist`** and invents errors that are not real (and hides
    exports that are). Run `tsc -b tsconfig.json` before believing a frontend
@@ -282,15 +314,29 @@ Traps that produced wrong conclusions here:
    `Intl.DateTimeFormat().resolvedOptions().locale` is `zh-SG`, so
    `'入口'.localeCompare('duplicate') === -1` and
    `markdown.unit.spec.ts > … duplicate names` fails here while passing on CI.
-8. The server package's `ava` cannot start **at all** in this checkout: its
-   `require: ['./src/prelude.ts']` prelude is resolved against
-   `node_modules/.cache/ava`, so every spec dies with `ERR_MODULE_NOT_FOUND`
-   before running. To execute a server-side module here, build it
-   (`tsc -b packages/backend/server/tsconfig.json`) and drive the compiled
-   `dist/**` from a scratch script, or run the TypeScript through vitest with
-   `unplugin-swc` configured for legacy decorators + metadata (the NestJS
-   `@Field` decorators in `errors.gen.ts` need both; `tsx`/esbuild does not emit
-   them).
+8. Three upstream storage tests fail on Windows for a filesystem reason, not a
+   logic one: they build fixtures from ids like `rust-test:<uuid>`, and `:` is
+   not a legal character in a Windows path, so the object store dies with
+   `os error 123` (invalid filename).
+   `strict_blob_management_authorizes_inventory_and_denies_before_object_cleanup`,
+   `strict_comment_reservation_rejects_hijack_and_cleans_expired_generation` and
+   `strict_storage_reservation_serializes_last_bytes_and_recovers_ledger_rows`
+   are the three; they should pass on Linux CI.
+9. `runtime/config/admin.rs` pinned `auth` at 11 descriptors, which upstream
+    ships but this fork does not: the three `signInMethods.*` switches added in
+    `28ac1be` were never counted, so
+    `native_descriptors_and_validation_share_runtime_contract` was red and hid
+    any real descriptor drift. Fixed — it now asserts 14 and pins the three keys
+    and their env names.
+10. The server package's `ava` cannot start **at all** in this checkout: its
+    `require: ['./src/prelude.ts']` prelude is resolved against
+    `node_modules/.cache/ava`, so every spec dies with `ERR_MODULE_NOT_FOUND`
+    before running. To execute a server-side module here, build it
+    (`tsc -b packages/backend/server/tsconfig.json`) and drive the compiled
+    `dist/**` from a scratch script, or run the TypeScript through vitest with
+    `unplugin-swc` configured for legacy decorators + metadata (the NestJS
+    `@Field` decorators in `errors.gen.ts` need both; `tsx`/esbuild does not emit
+    them).
 
 ---
 

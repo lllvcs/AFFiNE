@@ -16,8 +16,12 @@ description: Use when developing on the AFFiNE self-hosted fork (config, auth, s
 
 - Baseline: upstream AFFiNE source at version `0.27.5`, branch `canary`
 - Images: `ghcr.io/lllvcs/affine` (build artifact) → `lvcs/affine` (published)
-- This machine has no docker and no old clients: protocol and end-to-end
-  behaviour can only be verified on the deployment instance.
+- Docker **is** available on this machine, inside WSL (`wsl -d Ubuntu-24.04`,
+  user `lvcs`, Docker 29.x, compose v5). Windows reaches a published container
+  port on `localhost` directly, so a throwaway Postgres is enough to run the
+  database-backed native tests and to apply the Prisma migrations for real. What
+  is still missing is a released client (0.27.4 desktop / 0.27.1 mobile), so
+  protocol compatibility still needs the deployment instance.
 
 ## Quick index
 
@@ -242,8 +246,11 @@ delete `foo.md`.
 lint, cargo check) and what can only happen on the instance (protocol, OIDC
 round trip, client compatibility). Put both in the commit message.
 
-**Because.** This environment cannot run docker. "Should work" has been wrong
-more than once; the user can only test what you tell them to test.
+**Because.** "Should work" has been wrong more than once; the user can only test
+what you tell them to test. Do not over-claim the other way either: docker,
+a Postgres and the real migrations *are* available here (see the baseline note),
+so "no docker on this machine" is not an excuse for skipping a database-backed
+test — it is only an excuse for skipping the client-compatibility ones.
 
 ---
 

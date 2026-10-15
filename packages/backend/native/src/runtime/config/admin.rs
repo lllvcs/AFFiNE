@@ -696,7 +696,25 @@ mod tests {
     );
 
     let auth = app_config_descriptors("auth".to_string()).unwrap();
-    assert_eq!(auth.len(), 11);
+    // Upstream ships 11; this fork adds the three `signInMethods.*` switches
+    // (`28ac1be`), which is why the count is pinned to 14 here.
+    assert_eq!(auth.len(), 14);
+    assert_eq!(
+      auth
+        .iter()
+        .map(|descriptor| descriptor.key.as_str())
+        .filter(|key| key.starts_with("signInMethods."))
+        .collect::<Vec<_>>(),
+      ["signInMethods.password", "signInMethods.magicLink", "signInMethods.oauth"]
+    );
+    for key in ["signInMethods.password", "signInMethods.magicLink", "signInMethods.oauth"] {
+      let descriptor = auth
+        .iter()
+        .find(|descriptor| descriptor.key == key)
+        .unwrap_or_else(|| panic!("{key} descriptor"));
+      assert_eq!(descriptor.default_value, json!(true), "{key}");
+      assert_eq!(descriptor.env_name.as_deref().is_some(), true, "{key}");
+    }
     assert_eq!(
       auth
         .iter()
