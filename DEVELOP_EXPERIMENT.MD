@@ -209,13 +209,27 @@ caller), and have `load_profiles` collect a reason per branch — selecting
 The coverage string now also says the key must be enabled and that it only applies
 to the workspace it was added in.
 
-**Answer to the question it raised:** yes, chat requires tool calling. The
-built-in `Chat With AFFiNE AI` prompt declares 15 tools, the native layer adds
-`ModelFeature::ToolCalling` to `chat.default` whenever `!request.tools.is_empty()`,
-and the "Workspace All Docs" switch in the chat input only filters eight of them
-(`docSearch`, `docRead`, `docCanvasRead`, the four `frontend*` readers) — so
-`artifactRead`, `artifactSearch`, `webSearch`, `docCompose` and `codeArtifact`
-still make the requirement binding.
+**Answer to the question it raised:** tool calling is **not** required — but it
+was until the follow-up below. The built-in `Chat With AFFiNE AI` prompt declares
+15 tools, the native layer adds `ModelFeature::ToolCalling` to `chat.default`
+whenever `!request.tools.is_empty()`, and the "Workspace All Docs" switch in the
+chat input only filters eight of them (`docSearch`, `docRead`, `docCanvasRead`,
+the four `frontend*` readers) — so `artifactRead`, `artifactSearch`, `webSearch`,
+`docCompose` and `codeArtifact` made the requirement binding. Unpicking the
+switch was not the fix; dropping the requirement when no model can meet it was.
+
+**Follow-up (same incident, second round).** The user's model simply cannot call
+tools, and the first round's answer amounted to "then use another model" — not an
+answer on a self-hosted BYOK deployment. `prepare_copilot` now retries the route
+once with the tool definitions stripped from the request
+(`dispatch::strip_tool_definitions`, which clears `tool_choice` with them) and the
+slot requirements re-derived from what is left, then logs
+`no tool-capable model for chat.default: retried without tool definitions and found N candidate(s)`.
+If the retry fails too, the **first** error is returned, because its diagnostic
+still names the capability the request asked for. The settings panel had been
+reporting the wrong requirement as well: "Writing and chat" now needs text output
+only, and the "Actions and structured output" row carries the tool story, since
+that is the thing that actually breaks without tool calling.
 
 ---
 
@@ -262,12 +276,13 @@ CARGO_HOME=E:/AFFiNE/.cargo RUSTUP_HOME=$HOME/.rustup \
 ```
 
 The database-backed native tests **skip silently** when `DATABASE_URL` is unset
-(they `return Ok(())`), so an unset variable looks exactly like a pass. With the
-container above:
+(they `return Ok(())`), so an unset variable looks exactly like a pass. Run them
+**by module**, not as a whole suite — the suite is unreliable on this machine
+(trap 11). Confirm the container is up first (`docker ps`):
 
 ```sh
 DATABASE_URL=postgresql://affine@localhost:5433/affine \
-  cargo.exe test -p affine_server_native --lib -- --nocapture --test-threads=1
+  cargo.exe test -p affine_server_native --lib -- copilot:: --nocapture --test-threads=1
 ```
 
 `--nocapture` is the point: the copilot diagnostics are `eprintln!` lines, and
@@ -337,6 +352,18 @@ Traps that produced wrong conclusions here:
     `unplugin-swc` configured for legacy decorators + metadata (the NestJS
     `@Field` decorators in `errors.gen.ts` need both; `tsx`/esbuild does not emit
     them).
+11. **The full native suite is not a usable signal on this machine** — use targeted
+    runs. Identical code produced 3, 57, 62, 63, 83 and 84 failures across runs;
+    the failing tests pass individually and in small groups (`config::store::tests`
+    + `migrations::tests` together: 9 passed in 0.14 s; the same two
+    `backend_runtime::tests` that fail in the suite: 2 passed in 2.11 s), and a run
+    with the new tests excluded via `--skip` still reported 83 failures. The
+    failure mode is a ~20 s stall per test ending in sqlx `PoolTimedOut`, so the
+    suite also takes 1000–2200 s instead of ~100 s. Neither raising
+    `max_connections` to 400 nor replacing `localhost` with the WSL VM IP
+    (`hostname -I`) changed it, so treat the cause as unknown but environmental.
+    What *is* reliable: `cargo test -p affine_server_native --lib -- <module>`,
+    which returns in well under a second for the copilot modules.
 
 ---
 

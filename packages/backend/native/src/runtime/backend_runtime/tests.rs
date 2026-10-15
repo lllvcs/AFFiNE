@@ -2904,3 +2904,187 @@ async fn runtime_state_cleanup_deletes_expired_and_consumed_rows() {
   .unwrap();
   assert_eq!(remaining, 0);
 }
+// ---------------------------------------------------------------------------
+// Chat must still work when the only model cannot call tools.
+// See `prepare_copilot` in `copilot/mod.rs`.
+// ---------------------------------------------------------------------------
+
+/// `needs_tools = !request.tools.is_empty()` makes `chat.default` require
+/// `tool_calling`, and the built-in chat prompt always ships tool definitions, so
+/// before the retry in `prepare_copilot` a deployment whose only model is a plain
+/// completion endpoint could not use the AI panel at all: every turn died with
+/// `no_compatible_target`. This drives the real `prepare_copilot`; the route
+/// decision is the whole subject, no provider is contacted.
+#[tokio::test]
+async fn chat_routes_a_text_only_model_without_tool_definitions() -> AnyResult<()> {
+  use crate::{
+    llm::{
+      ByokCapabilityInput, ByokEndpointInput, ByokModelDeclarationInput, ByokProfileDefinitionInput,
+      CopilotAccessProjection, CopilotExecuteInput, CopilotManagedTier, CreateByokProfileInput, byok::ByokPolicy,
+    },
+    runtime::{CopilotRuntimeConfig, Deployment, config::CopilotByokRuntimeConfig},
+  };
+  use llm_adapter::{
+    core::{CoreContent, CoreMessage, CoreRequest, CoreRole, CoreToolDefinition},
+    router::ExecutableRequest,
+  };
+  use serde_json::json;
+
+  let _guard = pg_test_lock().lock().await;
+  let Some(runtime) = runtime_from_database_url().await? else {
+    return Ok(());
+  };
+  let pool = runtime.pool().await?;
+  let byok_table: bool = sqlx::query_scalar(
+    "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+     WHERE table_schema = 'public' AND table_name = 'ai_workspace_byok_configs')",
+  )
+  .fetch_one(&pool)
+  .await?;
+  if !byok_table {
+    return Ok(());
+  }
+
+  // `runtime_from_database_url` hands back the cloud default, which has copilot
+  // disabled; `BackendRuntimeConfig` is not `Clone`, so rebuild it.
+  *runtime.config.write().unwrap() = Arc::new(BackendRuntimeConfig {
+    database_url: std::env::var("DATABASE_URL")?,
+    auth: Default::default(),
+    invite_quota: Default::default(),
+    private_key: Arc::new(Zeroizing::new("test-private-key".to_string())),
+    deployment: Deployment::SelfHosted,
+    copilot: CopilotRuntimeConfig {
+      enabled: true,
+      byok: CopilotByokRuntimeConfig::default(),
+      providers: Default::default(),
+    },
+    search: Default::default(),
+    redis: Default::default(),
+    payment: Default::default(),
+  });
+
+  let suffix = uuid::Uuid::new_v4().simple().to_string();
+  // (workspace, user, whether the stored model declares tool calling)
+  let mut fixtures = Vec::new();
+  for (name, tool_calling) in [("tools", true), ("plain", false)] {
+    let user_id = format!("byok-tools-user-{name}-{suffix}");
+    let workspace_id = format!("byok-tools-workspace-{name}-{suffix}");
+    sqlx::query("INSERT INTO users(id,name,email) VALUES($1,'BYOK Tools Test',$2)")
+      .bind(&user_id)
+      .bind(format!("byok-tools-{name}-{suffix}@example.com"))
+      .execute(&pool)
+      .await?;
+    sqlx::query("INSERT INTO workspaces(id) VALUES($1)")
+      .bind(&workspace_id)
+      .execute(&pool)
+      .await?;
+
+    let policy = ByokPolicy::from(Deployment::SelfHosted, &CopilotByokRuntimeConfig::default());
+    super::byok::create(
+      &pool,
+      b"byok-tools-test-secret",
+      &policy,
+      CreateByokProfileInput {
+        workspace_id: workspace_id.clone(),
+        provider: "openai".to_string(),
+        name: "test key".to_string(),
+        description: None,
+        credential: "sk-not-a-real-key".to_string(),
+        definition: ByokProfileDefinitionInput {
+          endpoint: ByokEndpointInput {
+            kind: "provider_default".to_string(),
+            url: None,
+            dialect: None,
+          },
+          models: vec![ByokModelDeclarationInput {
+            model_id: "gpt-4o-mini".to_string(),
+            enabled: true,
+            capabilities: vec![ByokCapabilityInput {
+              input: vec!["text".to_string()],
+              output: vec!["text".to_string()],
+              features: if tool_calling {
+                vec!["tool_calling".to_string()]
+              } else {
+                Vec::new()
+              },
+              attachment_kinds: Vec::new(),
+              attachment_sources: Vec::new(),
+            }],
+          }],
+        },
+        enabled: true,
+        actor_user_id: user_id.clone(),
+      },
+    )
+    .await?;
+    fixtures.push((workspace_id, user_id, tool_calling));
+  }
+
+  for (workspace_id, user_id, tool_calling) in &fixtures {
+    let input = CopilotExecuteInput {
+      slot: "chat.default".to_string(),
+      built_in_route_id: None,
+      workspace_id: Some(workspace_id.clone()),
+      user_id: Some(user_id.clone()),
+      local_lease_id: None,
+      access: CopilotAccessProjection {
+        route_allowed: true,
+        managed_tier: CopilotManagedTier::Standard,
+        server_byok: true,
+        local_byok: false,
+      },
+      managed_target_id: None,
+      target_override: None,
+      request: serde_json::to_value(CoreRequest {
+        model: "route-selected".to_string(),
+        messages: vec![CoreMessage {
+          role: CoreRole::User,
+          content: vec![CoreContent::Text {
+            text: "hello".to_string(),
+          }],
+        }],
+        stream: true,
+        max_tokens: Some(64),
+        temperature: None,
+        tools: vec![CoreToolDefinition {
+          name: "doc_search".to_string(),
+          description: None,
+          parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        tool_choice: None,
+        include: None,
+        reasoning: None,
+        response_schema: None,
+      })?,
+    };
+
+    let (_, slot, request, profiles, candidates, _) = runtime.prepare_copilot(input).await?;
+    assert_eq!(slot.id, "chat.default");
+    assert_eq!(profiles.len(), 1, "the stored key must be routed to");
+    assert!(!candidates.is_empty());
+    let tool_count = match &request {
+      ExecutableRequest::Chat(chat) => chat.tools.len(),
+      other => panic!("expected a chat request, got {other:?}"),
+    };
+    if *tool_calling {
+      assert_eq!(tool_count, 1, "a tool-capable model keeps its definitions");
+    } else {
+      assert_eq!(
+        tool_count, 0,
+        "a model without tool_calling must be retried with the definitions dropped"
+      );
+    }
+  }
+
+  for (workspace_id, user_id, _) in fixtures {
+    sqlx::query("DELETE FROM workspaces WHERE id = $1")
+      .bind(workspace_id)
+      .execute(&pool)
+      .await?;
+    sqlx::query("DELETE FROM users WHERE id = $1")
+      .bind(user_id)
+      .execute(&pool)
+      .await?;
+  }
+  Ok(())
+}

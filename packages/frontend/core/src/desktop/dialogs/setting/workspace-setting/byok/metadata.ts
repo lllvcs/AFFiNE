@@ -94,9 +94,10 @@ export const capabilityRows = [
       ByokProvider.anthropic,
       ByokProvider.gemini,
     ],
-    // Chat requests always ship tool definitions, so the route needs a model that
-    // declares tool calling on top of text output.
-    coverageCapabilities: ['Text', 'Actions'],
+    // Text output is the hard requirement. Chat always ships tool definitions,
+    // but a model without "Actions" is still routed — with the definitions
+    // dropped — so tool calling belongs to the row below, not here.
+    coverageCapabilities: ['Text'],
   },
   {
     titleKey: 'feature.action.title',

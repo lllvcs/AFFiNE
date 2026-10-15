@@ -42,6 +42,7 @@ description: Use when developing on the AFFiNE self-hosted fork (config, auth, s
 | R13 Serve browser-fetched assets same-origin | a feature works upstream and fails here |
 | R14 Match the error string you actually receive | a mapping/guard never fires in production |
 | R15 An empty list has to explain itself | a helper returns nothing and nobody knows why |
+| R16 A capability gap must not delete a feature | a route demands more than the feature needs |
 
 ---
 
@@ -329,6 +330,31 @@ key was simply not loaded.
 **Verify.** Disable a key, open the AI panel, and read the new
 `[affine-copilot] no BYOK profile was loaded (…): …` line — it must name the key
 and say it is disabled.
+
+---
+
+## R16. A capability gap must not delete a whole feature
+
+**Do.** Before failing a route (or any guard) because a model lacks a capability,
+ask whether the feature actually needs it. Retry once without the *optional* part,
+strip it from the request as well as from the requirement, and log that you did.
+"Optional" means the feature still produces something useful without it — tool
+definitions are how the assistant reaches the workspace, not what it needs in
+order to answer.
+
+**Because.** `needs_tools = !request.tools.is_empty()` made `chat.default` require
+`tool_calling`, and the built-in chat prompt always ships fifteen tools, so on a
+self-hosted deployment whose only BYOK model is a plain completion endpoint the
+entire AI panel was unreachable — `no_compatible_target` on every turn, with the
+user's only correct reading being "buy a different model". Removing the tools
+turns that into ordinary chat that works.
+
+**Verify.** `chat_routes_a_text_only_model_without_tool_definitions` in
+`backend_runtime/tests.rs` drives the real `prepare_copilot` twice — once with a
+model that declares tool calling (the definitions must survive) and once without
+(it must be retried with an empty tool list) — against a real database, no
+provider involved. The run prints
+`[affine-copilot] no tool-capable model for chat.default: retried without tool definitions …`.
 
 ---
 

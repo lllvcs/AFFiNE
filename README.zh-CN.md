@@ -89,8 +89,9 @@ Uncaught (in promise) TypeError: Failed to fetch
 
 * **原生错误前缀没被剥掉。** native 层把所有错误包成 `[affine-runtime:<code>] <message>`，`BackendRuntimeCoreOperations.measured` 会剥掉它，但**流式**返回的错误（`executeCopilotStream`）不经过那个包装，于是 `mapNativeSemanticError` 匹配不上 `no_compatible_target`，原样抛给 SSE 层，用户只看到 `Internal Server Error: An internal error occurred`。现在匹配前先剥前缀，用户会看到真正的可操作提示（写明了去 Settings → Workspace → AI 检查什么）。
 * **`profiles=0` 说不清为什么。** 以前「密钥加在别的工作区」「密钥被停用」「本地租约过期」「没有授权」四种情况长得一模一样：SQL 里直接 `WHERE enabled = TRUE` 把停用的行滤掉了，本地租约的每条过滤也都是静默的。现在 `load_profiles` 会把每条跳过原因收集起来，在一条 profile 都没加载到时打印一行 `[affine-copilot] no BYOK profile was loaded (…): <原因>`。
+* **不支持工具调用的模型不再等于整个 AI 面板不可用。** 见下。
 
-**关于 tool calling：是，必须支持。** 内置的 `Chat With AFFiNE AI` 提示词自带 15 个工具（`docRead`/`docSearch`/`artifactSearch`/`webSearch`/`docCompose`/`codeArtifact` …），只要请求里带 tools，native 就会给 `chat.default` 槽位加上 `features: ["tool_calling"]`。对话输入框里的「Workspace All Docs」开关只滤掉其中 8 个（检索与读文档类），剩下的 `artifactRead`/`artifactSearch`/`webSearch`/`docCompose`/`codeArtifact` 仍然会发出去——所以关掉它并不能让不支持 tool calling 的模型可用。
+**关于 tool calling：不是必须的。** 模型只会输出文本也能对话：路由找不到支持工具调用的模型时，会**丢掉工具定义重试一次**，打印 `[affine-copilot] no tool-capable model for chat.default: retried without tool definitions …`，然后按普通对话补全返回。代价是助手失去了「伸进工作区」的能力——内置的 `Chat With AFFiNE AI` 提示词自带 15 个工具（`docSearch`/`docRead`/`artifactSearch`/`webSearch`/`docCompose`/`codeArtifact` …），没有工具调用它们一个都不会执行。对话输入框里的「Workspace All Docs」开关负责关掉其中 8 个；给模型勾上「动作」才是打开其余工具的方式。设置面板把两件事分开显示：「写作与聊天」需要文本输出，「动作与结构化输出」才需要工具调用。
 
 ---
 
@@ -351,7 +352,9 @@ git push origin canary
 
 **AI 对话报 `no_compatible_target`。** 先看服务端日志里紧跟其后的那行 `[affine-copilot] no BYOK profile was loaded (…): …`（自本次改动起），它直接说明密钥为什么没被加载：没加在**当前**工作区、被停用了、本地租约过期，或者没有授权。四者症状完全一样，别靠猜。
 
-确认密钥本身没问题后，再看能力要求：对话总是带 tools，因此路由要求模型声明 `tool_calling`；只有文本输出的模型会被拒。要么在你的网关/模型上声明工具调用能力，要么换一个支持它的模型。自 `a16e5f3` 起报错会写明所需能力而不只是原因，本次改动前这条提示其实**没能送到前端**（原生错误前缀没剥掉，被降级成了 `Internal Server Error`）——如果你在旧镜像上只看到 `An internal error occurred`，请以服务端日志为准。注意：BYOK 的"测试"按钮是直接探测你的提供方，**不走路由决策**，所以测试通过不代表对话可用。
+确认密钥本身没问题后，再看能力要求：**现在只有文本输出的模型也能对话**——路由找不到支持工具调用的模型时会丢掉工具定义重试一次。如果仍然报 `no_compatible_target`，紧挨着的那行诊断会逐个列出已加载的 profile 以及是否匹配：找 `matchesSlot=false` 和它后面的 `capabilities=[…]`。想要助手能检索工作区、读取文档，就给该模型勾上「动作」；只想要普通对话，不勾也行。注意：BYOK 的"测试"按钮是直接探测你的提供方，**不走路由决策**，所以测试通过不代表对话可用。
+
+**AI 对话能答，但明显没读当前文档、也没搜工作区。** 这就是降级到「无工具」的表现：选中的模型没声明工具调用，所以这次请求没有下发任何工具。给模型勾上「动作」，或换一个声明了工具调用的模型即可恢复。
 
 **AI 对话报 `Internal Server Error: An internal error occurred`，日志里有 `copilot route unavailable: …`。** 旧镜像上这是错误映射失效的表现（见 §1.9），真正的失败原因就在那行 native 诊断里：`slot=` 是请求的槽位，`workspace=` 是发起对话的工作区，`profiles=` 是加载到的 BYOK profile 数量。`profiles=0` 表示那条工作区下没有任何**已启用**的密钥参与路由——用下面的 SQL 对照 `workspace=` 的值即可：
 

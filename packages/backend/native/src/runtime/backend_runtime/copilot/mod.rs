@@ -252,22 +252,56 @@ impl BackendRuntime {
       request,
     } = input;
     let base_slot = route::slot(&slot).ok_or_else(|| RuntimeError::invalid_input("unknown copilot route slot"))?;
-    let (slot, request) = dispatch::request_and_slot(base_slot, request)?;
-    let authorized = self
-      .authorize_copilot_route(
-        CopilotRouteCheckInput {
-          slot: slot.id.to_string(),
-          built_in_route_id,
-          workspace_id,
-          user_id,
-          local_lease_id,
-          access,
-          managed_target_id,
-          target_override,
-        },
-        slot,
-      )
-      .await?;
+    let (requested_slot, mut request) = dispatch::request_and_slot(base_slot.clone(), request)?;
+    let route_input = CopilotRouteCheckInput {
+      slot: requested_slot.id.to_string(),
+      built_in_route_id,
+      workspace_id,
+      user_id,
+      local_lease_id,
+      access,
+      managed_target_id,
+      target_override,
+    };
+    let authorized = match self
+      .authorize_copilot_route(route_input.clone(), requested_slot.clone())
+      .await
+    {
+      Ok(authorized) => authorized,
+      Err(error) => {
+        // A model that cannot call tools is still a perfectly usable chat model:
+        // the tool definitions are how the assistant reaches the workspace, not
+        // what it needs in order to answer. Retry once without them, or every
+        // self-hosted BYOK deployment whose only model is a plain completion
+        // endpoint loses the whole AI panel - which is exactly what
+        // `no_compatible_target` reported before this.
+        if !no_compatible_target(&error) || !dispatch::strip_tool_definitions(&mut request) {
+          return Err(error);
+        }
+        let (needs_tools, attachment_kinds, attachment_sources) = dispatch::request_requirements(&request);
+        let retry_slot =
+          route::with_request_requirements(base_slot, needs_tools, attachment_kinds, attachment_sources);
+        match self.authorize_copilot_route(route_input, retry_slot).await {
+          Ok(authorized) => {
+            eprintln!(
+              "[affine-copilot] no tool-capable model for {}: retried without tool definitions and found {} candidate(s)",
+              requested_slot.id,
+              authorized.candidates.len()
+            );
+            authorized
+          }
+          Err(retry_error) => {
+            // Report the first failure: its diagnostic still names the capability
+            // the request asked for, and the retry was only our own fallback.
+            eprintln!(
+              "[affine-copilot] no tool-capable model for {} and none without tools either: {retry_error}",
+              requested_slot.id
+            );
+            return Err(error);
+          }
+        }
+      }
+    };
     let managed_credentials = self
       .resolve_managed_credentials(&authorized.config, &authorized.profiles, &authorized.candidates)
       .await?;
@@ -437,6 +471,12 @@ async fn managed_token_provider(
     .get_or_try_init(|| dispatch::create_vertex_token_provider(profile))
     .await
     .map(Arc::clone)
+}
+
+/// `authorize_copilot_route` reports "nothing matched" as an invalid-state error
+/// whose message leads with the reason token (`no_compatible_target: slot=…`).
+fn no_compatible_target(error: &RuntimeError) -> bool {
+  matches!(error, RuntimeError::InvalidState(message) if message.starts_with("no_compatible_target"))
 }
 
 fn reason_name(reason: route::RouteDecisionReason) -> &'static str {

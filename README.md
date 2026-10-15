@@ -188,15 +188,20 @@ log. Two links in that chain were broken, both fixed:
   collects the reason for each branch and prints one
   `[affine-copilot] no BYOK profile was loaded (…): <reasons>` line when nothing
   was loaded.
+* **A model without tool calling no longer loses the whole AI panel.** See below.
 
-**Is tool calling required? Yes.** The built-in `Chat With AFFiNE AI` prompt
-declares 15 tools (`docRead`, `docSearch`, `artifactSearch`, `webSearch`,
-`docCompose`, `codeArtifact`, …); whenever a request carries tools, the native
-layer adds `features: ["tool_calling"]` to the `chat.default` slot. The "Workspace
-All Docs" switch in the chat input only removes eight of them (the retrieval and
-doc-reading ones) — `artifactRead`, `artifactSearch`, `webSearch`, `docCompose`
-and `codeArtifact` are still sent, so turning it off does **not** make a model
-without tool calling usable.
+**Is tool calling required? No.** Chat works with a model that only outputs text:
+when the route cannot find a tool-capable model it retries once with the tool
+definitions dropped, logs
+`[affine-copilot] no tool-capable model for chat.default: retried without tool definitions …`,
+and answers as a plain chat completion. What you lose is the assistant's reach
+into the workspace — the built-in `Chat With AFFiNE AI` prompt declares 15 tools
+(`docSearch`, `docRead`, `artifactSearch`, `webSearch`, `docCompose`,
+`codeArtifact`, …), and without tool calling none of them run. The
+"Workspace All Docs" switch in the chat input removes eight of them; ticking
+"Actions" for a model is what turns the rest on. The settings panel reports the
+two separately: "Writing and chat" needs text output, "Actions and structured
+output" needs tool calling.
 
 *Commits:* this change.
 
@@ -547,6 +552,19 @@ select id, workspace_id, provider, name, enabled, sort_order
 from ai_workspace_byok_configs
 order by workspace_id, sort_order;
 ```
+
+**AI chat says the model needs the "Actions" use case.** It does not have to: a
+model that only outputs text is now routed with the tool definitions dropped
+(§1.9). If you still see `no_compatible_target`, the log line right before it
+spells out every loaded profile and whether it matched — look for
+`matchesSlot=false` and the `capabilities=[…]` next to it. Tick "Actions" for
+that model if you want the assistant to search the workspace and read documents;
+leave it off if plain chat is enough.
+
+**AI chat answers without reading the current document or searching the
+workspace.** That is the tool-less fallback: the routed model does not declare
+tool calling, so no tools were sent. Enable the model's "Actions" use case (or add
+a model that has it) to get them back.
 
 **`affine_server` restarts in a loop.** Read the error: a missing or malformed
 `crypto.privateKey` produces `stable crypto.privateKey is required …` or

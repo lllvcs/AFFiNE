@@ -208,7 +208,12 @@ fn parse_request<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Ru
   serde_json::from_value(value).map_err(|error| RuntimeError::json("invalid copilot execution request", error))
 }
 
-fn request_requirements(request: &ExecutableRequest) -> (bool, Vec<AttachmentKind>, Vec<AttachmentSource>) {
+/// What the request itself demands from a model, on top of the slot's own
+/// requirements.
+///
+/// `pub(super)` because the route retry in `prepare_copilot` re-derives the slot
+/// after dropping the tool definitions.
+pub(super) fn request_requirements(request: &ExecutableRequest) -> (bool, Vec<AttachmentKind>, Vec<AttachmentSource>) {
   let mut kinds = HashSet::new();
   let mut sources = HashSet::new();
   let needs_tools = match request {
@@ -236,6 +241,23 @@ fn request_requirements(request: &ExecutableRequest) -> (bool, Vec<AttachmentKin
     ExecutableRequest::Embedding(_) | ExecutableRequest::Rerank(_) => false,
   };
   (needs_tools, kinds.into_iter().collect(), sources.into_iter().collect())
+}
+
+/// Drop the tool definitions from a chat request.
+///
+/// Returns whether there was anything to drop, so the caller can tell "this
+/// request never needed tools" (no point retrying) from "we just removed them".
+/// `tool_choice` has to go with them: asking a tool-less request to call a tool
+/// is what upstream providers reject first.
+pub(super) fn strip_tool_definitions(request: &mut ExecutableRequest) -> bool {
+  match request {
+    ExecutableRequest::Chat(chat) if !chat.tools.is_empty() => {
+      chat.tools.clear();
+      chat.tool_choice = None;
+      true
+    }
+    _ => false,
+  }
 }
 
 fn collect_message_attachments(
@@ -460,5 +482,70 @@ mod tests {
     };
     assert!(request.is_edit());
     assert_eq!(request.images()[0].media_type(), Some("image/png"));
+  }
+
+  fn chat_request_with_a_tool() -> ExecutableRequest {
+    let (_, request) = request_and_slot(
+      slot("chat.default").unwrap(),
+      json!({
+        "model": "route-selected",
+        "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hi" }] }],
+        "stream": true,
+        "tools": [{
+          "name": "doc_search",
+          "description": null,
+          "parameters": { "type": "object", "properties": {} }
+        }],
+        "toolChoice": { "name": "doc_search" }
+      }),
+    )
+    .unwrap();
+    request
+  }
+
+  #[test]
+  fn stripping_tools_makes_the_slot_requirement_disappear() {
+    let mut request = chat_request_with_a_tool();
+    let (needs_tools, _, _) = request_requirements(&request);
+    assert!(needs_tools, "the fixture must carry a tool definition");
+
+    assert!(strip_tool_definitions(&mut request));
+
+    // This is what lets the retry in `prepare_copilot` match a model that cannot
+    // call tools: without the definitions the slot no longer demands
+    // `tool_calling`.
+    let (needs_tools, _, _) = request_requirements(&request);
+    assert!(!needs_tools);
+    let ExecutableRequest::Chat(chat) = &request else {
+      panic!("expected a chat request");
+    };
+    assert!(chat.tools.is_empty());
+    assert!(chat.tool_choice.is_none(), "tool_choice goes with the tools");
+  }
+
+  #[test]
+  fn stripping_tools_is_a_no_op_without_any() {
+    let (_, mut request) = request_and_slot(
+      slot("chat.default").unwrap(),
+      json!({
+        "model": "route-selected",
+        "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hi" }] }],
+        "stream": true,
+        "tools": []
+      }),
+    )
+    .unwrap();
+    assert!(!strip_tool_definitions(&mut request));
+
+    // Non-chat slots carry no tools at all, so a retry would be pointless.
+    let mut structured = ExecutableRequest::Structured(
+      serde_json::from_value(json!({
+        "model": "route-selected",
+        "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hi" }] }],
+        "schema": { "type": "object", "properties": {} }
+      }))
+      .unwrap(),
+    );
+    assert!(!strip_tool_definitions(&mut structured));
   }
 }
