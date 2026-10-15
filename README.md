@@ -138,6 +138,35 @@ image:
 *Commits:* `b4781c0`, `24f5675`, `d7d383b`, `d96b436`, `fa43b17`, `a49759d`,
 `4c85772`, `e1bcbd4`, `fdf8f1b`.
 
+### 1.8 "Export to PDF" works on a self-hosted origin
+
+`pdfmake` fetches every font over `XMLHttpRequest` before it writes anything, and
+`cdn.affine.pro` only answers with `Access-Control-Allow-Origin` for AFFiNE's own
+origins, so on any other host the export aborted with
+
+```
+Access to XMLHttpRequest at 'https://cdn.affine.pro/fonts/Inter-Regular.woff'
+from origin 'https://<your host>' has been blocked by CORS policy
+Uncaught (in promise) TypeError: Failed to fetch
+```
+
+and produced no file. The exporter now resolves its fonts against the
+deployment's own asset root (`<publicPath>/fonts/…`, where the canvas text fonts
+have always come from), keeps the CDN only as a second choice, and treats "this
+path does not exist" correctly — a SPA fallback answers `200 text/html` for a
+missing font, which a naive `response.ok` check would accept.
+
+A CJK face is part of the image now: `SarasaGothicCL-Regular.ttf`, a 2.5 MB
+subset of Sarasa Gothic CL covering GB2312 plus Latin, Greek, Cyrillic, kana and
+CJK punctuation. Regenerate or widen it with
+`python tools/pdf-fonts/subset-fonts.py --coverage gbk` (see
+[`tools/pdf-fonts/README.md`](./tools/pdf-fonts/README.md)). If the CJK face is
+missing the export still runs, in Inter, with a warning — Latin text is fine,
+Chinese is not. If *no* font file can be loaded the export fails naming every URL
+it tried instead of hanging.
+
+*Commits:* this change (the commit message lists what was verified where).
+
 ---
 
 ## 2. Deploy
@@ -415,6 +444,28 @@ it cannot end up pointing at a non-image artifact.
 Changes to `config.json` are picked up on restart; environment variables always
 need a restart.
 
+### 5.1 Syncing with upstream
+
+`upstream` is `https://github.com/toeverything/AFFiNE.git`. The fork's own work
+sits on `canary` in a small number of commits, so a sync is a plain merge:
+
+```sh
+git fetch upstream canary
+git merge upstream/canary          # resolve, then run the checks in §7
+git push origin canary
+```
+
+Last synced: upstream `0b69a6d` (22 commits — a dependency bump with the
+Electron 41 / eslint 10 / esbuild 0.28 / nodemailer 10 / dompurify 3.4.16
+security bumps, audio-slice handling for m4a, transcript truncation, blob read
+cache and sync timing, the obsidian/onenote importer rework in
+`packages/frontend/native`, and the latex/katex 0.18 bump). It merged without
+conflicts; the only shared files were `packages/backend/native/index.d.ts`,
+`packages/backend/server/src/native.ts`, the Electron `package.json` and the two
+`i18n` resource files, and the two sides touched different regions of each.
+
+`yarn install` is required after a sync that moves `yarn.lock`.
+
 ---
 
 ## 6. Troubleshooting
@@ -451,6 +502,13 @@ run the routing decision, so a green test does not prove that chat will work.
 
 **Config edits seem to have no effect.** Two readers, two paths — see §2.2.
 
+**"Export to PDF" produces nothing and the console shows `cdn.affine.pro` font
+requests blocked by CORS.** The exporter is talking to the CDN instead of to your
+own instance. Check that `<your host>/fonts/Inter-Regular.woff2` returns
+`font/woff2` (and not `text/html`) and that
+`packages/frontend/core/public/fonts/SarasaGothicCL-Regular.ttf` is in the image;
+see §1.8 and [`tools/pdf-fonts/README.md`](./tools/pdf-fonts/README.md).
+
 ---
 
 ## 7. Development
@@ -465,6 +523,7 @@ The fork's own changes live in a small number of places:
 | Copilot diagnostics | `packages/backend/native/src/runtime/backend_runtime/copilot/*`, `packages/backend/server/src/plugins/copilot/runtime/native-errors.ts` |
 | Frontend sign-in / BYOK | `packages/frontend/core/src/components/sign-in/*`, `.../setting/workspace-setting/byok/*` |
 | Config plumbing | `packages/backend/server/src/base/config/*` |
+| PDF export fonts | `blocksuite/affine/shared/src/adapters/pdf/pdf-fonts.ts`, `packages/frontend/core/public/fonts/*`, `tools/pdf-fonts/*` |
 | Image pipeline | `.github/workflows/*.yml` |
 
 Verification commands (all runnable from the repository root):
@@ -512,3 +571,9 @@ belongs to [TOEVERYTHING PTE. LTD. and its contributors](https://github.com/toev
 Changes made here are the ones listed in [§1](#1-what-this-fork-changes) — patches
 that exist to make a self-hosted deployment work, and are offered back in the
 hope they are useful.
+
+`packages/frontend/core/public/fonts/SarasaGothicCL-Regular.ttf` is a subset of
+[Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic) by Renzhi Li and
+contributors, shipped under the SIL Open Font License 1.1 — the licence text
+travels with it as `SarasaGothicCL-LICENSE.txt`. The `Inter-*.woff2` faces next
+to it come from the Inter project, also under the OFL.

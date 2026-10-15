@@ -35,6 +35,7 @@ import { ViewExtensionManager } from '@blocksuite/affine/ext-loader';
 import { getInternalViewExtensions } from '@blocksuite/affine/extensions/view';
 import { FoundationViewExtension } from '@blocksuite/affine/foundation/view';
 import { InlineCommentViewExtension } from '@blocksuite/affine/inlines/comment';
+import { configurePdfFontBaseUrl } from '@blocksuite/affine/shared/adapters';
 import { AffineCanvasTextFonts } from '@blocksuite/affine/shared/services';
 import { BlockStdScope } from '@blocksuite/affine/std';
 import type { Store } from '@blocksuite/affine/store';
@@ -160,6 +161,10 @@ class ViewProvider {
 
   private readonly _configureFoundation = (framework?: FrameworkProvider) => {
     const peekViewService = framework?.get(PeekViewService);
+
+    // The PDF exporter fetches its fonts over XHR, which the browser only
+    // allows same-origin, so it has to look where the canvas fonts live.
+    configurePdfFontBaseUrl(environment.publicPath);
 
     this._manager.configure(FoundationViewExtension, {
       telemetry: {

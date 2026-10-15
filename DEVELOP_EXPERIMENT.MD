@@ -29,6 +29,7 @@
 | Realtime sync for released clients | `9b9f22e` `6912abd` | legacy `space:join` and the `sync-025`/`sync-026` rooms are served again; a rejected join names the client version |
 | Self-hosting docs | `9bb4520` `f422eeb` `3fb9695` | `server.hosts` semantics, the two config readers, the two-list rule |
 | Image pipeline | `b4781c0` … `fdf8f1b` | build and publish split, registry-to-registry copy, Pro public key gate |
+| PDF export fonts | this change | fonts resolve against the deployment's own origin first; Sarasa Gothic CL subset shipped in `@affine/core/public/fonts`; missing fonts degrade with a warning instead of hanging |
 
 ---
 
@@ -113,6 +114,51 @@ matched (`http://http://host`).
 **Fix:** config only — bare hosts, no scheme, and verify against the startup line
 `Telemetry allowed origins updated: …`.
 
+### 2.7 PDF export died on fonts it was never allowed to fetch
+
+**Symptom:** "Export to PDF" produced no file. The console showed five blocked
+requests to `https://cdn.affine.pro/fonts/{Inter-Regular,Inter-SemiBold,
+Inter-Italic,Inter-SemiBoldItalic}.woff` and `SarasaGothicCL-Regular.ttf`, each
+`blocked by CORS policy: No 'Access-Control-Allow-Origin' header`, then
+`Uncaught (in promise) TypeError: Failed to fetch (url: …)` from
+`npm-async-pdfmake`. The UI notification never appeared — the promise simply
+never settled.
+
+**Cause:** the PDF adapter hardcoded absolute `cdn.affine.pro` URLs in
+`pdfMake.fonts`. `pdfmake` fetches font entries over `XMLHttpRequest`, and the
+CDN answers with `Access-Control-Allow-Origin` only for AFFiNE's own origins
+(`curl -I -H 'Origin: https://app.affine.pro'` → header present;
+`-H 'Origin: https://note.6868688.xyz'` → header absent, `vary: accept-encoding`
+only). Every other consumer of those same files had already been switched to the
+deployment's own `/fonts/` — the canvas fonts via
+`environment.publicPath + 'fonts/'` in `view.ts`, the typst renderer via a local
+fallback — so the exporter was the last one talking to the CDN.
+
+Three more traps on the way:
+
+* A SPA fallback answers `200 text/html` for `<host>/fonts/SarasaGothicCL-Regular.ttf`
+  when the file does not exist. `response.ok` is therefore worthless as an
+  existence probe; the payload's magic bytes have to be checked.
+* `pdfMake.vfs` is `undefined` until something assigns it. Only `vfs_fonts` does,
+  and the exporter never loads it, so pre-seeding the virtual file system (which
+  is what makes the fonts cost one fetch per session instead of one per export)
+  needs `pdfMake.vfs = { ...(pdfMake.vfs ?? {}), [url]: base64 }`.
+* pdfkit's standard fonts are **not** available in the browser build: it reads
+  their AFM metrics through the same virtual file system
+  (`File 'data/Helvetica-Bold.afm' not found`), and those only ship with the Node
+  build. "Fall back to Helvetica" is not an option here.
+
+**Fix:** `blocksuite/affine/shared/src/adapters/pdf/pdf-fonts.ts` resolves each
+font against `<publicPath>/fonts/` first and `cdn.affine.pro` second, verifies
+the payload is a font, and caches the bytes in `pdfMake.vfs`. Missing CJK face →
+Inter plus a warning; nothing loadable → `PdfFontsUnavailableError` listing every
+URL that was tried. The CJK face itself is now shipped as a 2.45 MB TTF subset of
+Sarasa Gothic CL in `packages/frontend/core/public/fonts/`. WOFF2 would have been
+half the size but fontTools' WOFF2 writer applies the glyf/loca transform, which
+the fontkit copy inside pdfmake 0.2.20 cannot decode (`TTFSubset.encode` →
+`Cannot read properties of undefined (reading 'version')`), so TTF it is — see
+`tools/pdf-fonts/README.md`.
+
 ---
 
 ## 3. Architecture notes
@@ -149,6 +195,14 @@ CARGO_HOME=E:/AFFiNE/.cargo RUSTUP_HOME=$HOME/.rustup \
 # TypeScript (server layer)
 node_modules/.bin/tsc -p packages/backend/server/tsconfig.json --noEmit
 node node_modules/oxlint/bin/oxlint <changed files>
+
+# Frontend / blocksuite (whole monorepo, builds project references first)
+node_modules/.bin/tsc -b tsconfig.json
+node_modules/.bin/vitest run --project @blocksuite/affine blocksuite/affine/all/src/__tests__/adapters/
+
+# PDF fonts: does the instance serve them itself?
+curl -sI https://<host>/fonts/Inter-Regular.woff2 | grep -i content-type
+curl -sI -H 'Origin: https://<host>' https://cdn.affine.pro/fonts/Inter-Regular.woff | grep -i access-control
 ```
 
 Traps that produced wrong conclusions here:
@@ -160,6 +214,14 @@ Traps that produced wrong conclusions here:
 3. `grep -c` on a minified bundle counts lines, not occurrences.
 4. Windows filesystems are case-insensitive: `rm NAME.MD` deletes `NAME.md`.
 5. Without docker there is no local end-to-end: state that explicitly.
+6. `tsc -p <package>` alone resolves cross-package imports through the referenced
+   projects' **stale `dist`** and invents errors that are not real (and hides
+   exports that are). Run `tsc -b tsconfig.json` before believing a frontend
+   error — this is R11 in the other direction.
+7. Tests that sort with `localeCompare` are locale-dependent: on this machine
+   `Intl.DateTimeFormat().resolvedOptions().locale` is `zh-SG`, so
+   `'入口'.localeCompare('duplicate') === -1` and
+   `markdown.unit.spec.ts > … duplicate names` fails here while passing on CI.
 
 ---
 

@@ -37,6 +37,12 @@ import {
   extractSvgDimensions,
 } from './image-utils.js';
 import {
+  ensurePdfFontsReady,
+  PDF_FONT_CJK,
+  PDF_FONT_INTER,
+  type PdfFontResolution,
+} from './pdf-fonts.js';
+import {
   getBulletIconSvg,
   getCheckboxIconSvg,
   getToggleIconSvg,
@@ -50,19 +56,13 @@ import {
   textContentToString,
 } from './utils.js';
 
-pdfMake.fonts = {
-  Inter: {
-    normal: 'https://cdn.affine.pro/fonts/Inter-Regular.woff',
-    bold: 'https://cdn.affine.pro/fonts/Inter-SemiBold.woff',
-    italics: 'https://cdn.affine.pro/fonts/Inter-Italic.woff',
-    bolditalics: 'https://cdn.affine.pro/fonts/Inter-SemiBoldItalic.woff',
-  },
-  SarasaGothicCL: {
-    normal: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
-    bold: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
-    italics: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
-    bolditalics: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
-  },
+/**
+ * Until {@link ensurePdfFontsReady} has run, assume the upstream font names so
+ * that `getDocDefinition` keeps reporting the family it always did.
+ */
+const CANDIDATE_FONTS: Pick<PdfFontResolution, 'defaultFont' | 'monoFont'> = {
+  defaultFont: PDF_FONT_CJK,
+  monoFont: PDF_FONT_INTER,
 };
 
 export type PdfAdapterFile = {
@@ -95,8 +95,7 @@ export class PdfAdapter extends BaseAdapter<PdfAdapterFile> {
     FromBlockSnapshotResult<PdfAdapterFile>
   > {
     const content = await this._buildContent([snapshot], assets);
-    const definition = this._createDocDefinition(undefined, content);
-    const blob = await this._createPdfBlob(definition);
+    const blob = await this._createPdf(undefined, content);
     return {
       file: {
         blob,
@@ -111,8 +110,7 @@ export class PdfAdapter extends BaseAdapter<PdfAdapterFile> {
     assets,
   }: FromDocSnapshotPayload): Promise<FromDocSnapshotResult<PdfAdapterFile>> {
     const content = await this._buildContent([snapshot.blocks], assets);
-    const definition = this._createDocDefinition(snapshot.meta?.title, content);
-    const blob = await this._createPdfBlob(definition);
+    const blob = await this._createPdf(snapshot.meta?.title, content);
     return {
       file: {
         blob,
@@ -129,8 +127,7 @@ export class PdfAdapter extends BaseAdapter<PdfAdapterFile> {
     FromSliceSnapshotResult<PdfAdapterFile>
   > {
     const content = await this._buildContent(snapshot.content, assets);
-    const definition = this._createDocDefinition(undefined, content);
-    const blob = await this._createPdfBlob(definition);
+    const blob = await this._createPdf(undefined, content);
     return {
       file: {
         blob,
@@ -931,7 +928,8 @@ export class PdfAdapter extends BaseAdapter<PdfAdapterFile> {
 
   private _createDocDefinition(
     title: string | undefined,
-    content: Content[]
+    content: Content[],
+    fonts: Pick<PdfFontResolution, 'defaultFont' | 'monoFont'> = CANDIDATE_FONTS
   ): TDocumentDefinitions {
     const docContent =
       title === undefined
@@ -975,17 +973,32 @@ export class PdfAdapter extends BaseAdapter<PdfAdapterFile> {
         },
         code: {
           fontSize: 10,
-          font: 'Inter',
+          font: fonts.monoFont,
           color: PDF_COLORS.text,
           background: PDF_COLORS.codeBackground,
         },
       },
       defaultStyle: {
-        font: 'SarasaGothicCL',
+        font: fonts.defaultFont,
         fontSize: 12,
         lineHeight: 1.5,
       },
     };
+  }
+
+  /**
+   * Resolve the fonts first: `pdfmake` refuses to build a document whose
+   * `defaultStyle.font` is not in `pdfMake.fonts`, and the families available
+   * depend on which font files the deployment can actually serve.
+   */
+  private async _createPdf(
+    title: string | undefined,
+    content: Content[]
+  ): Promise<Blob> {
+    const fonts = await ensurePdfFontsReady();
+    return this._createPdfBlob(
+      this._createDocDefinition(title, content, fonts)
+    );
   }
 
   private async _createPdfBlob(

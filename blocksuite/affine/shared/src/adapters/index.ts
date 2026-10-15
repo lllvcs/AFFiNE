@@ -63,6 +63,15 @@ export {
 export * from './notion-text';
 export { PdfAdapter } from './pdf';
 export {
+  configurePdfFontBaseUrl,
+  ensurePdfFontsReady,
+  PDF_FONT_CJK,
+  PDF_FONT_INTER,
+  type PdfFontResolution,
+  PdfFontsUnavailableError,
+  resetPdfFontsForTesting,
+} from './pdf';
+export {
   BlockPlainTextAdapterExtension,
   type BlockPlainTextAdapterMatcher,
   BlockPlainTextAdapterMatcherIdentifier,

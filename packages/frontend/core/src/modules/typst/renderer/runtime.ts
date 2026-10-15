@@ -19,7 +19,9 @@ const DEFAULT_FONT_FALLBACKS: Record<string, string> = {
   'Inter-SemiBold.woff': 'Inter-SemiBold.woff2',
   'Inter-Italic.woff': 'Inter-Italic.woff2',
   'Inter-SemiBoldItalic.woff': 'Inter-SemiBoldItalic.woff2',
-  'SarasaGothicCL-Regular.ttf': 'Inter-Regular.woff2',
+  // Served from our own /fonts/ as well, so typst gets a real CJK face instead
+  // of falling back to Inter, which has no CJK glyphs.
+  'SarasaGothicCL-Regular.ttf': 'SarasaGothicCL-Regular.ttf',
   'Inter-Regular.woff2': 'Inter-Regular.woff2',
   'Inter-SemiBold.woff2': 'Inter-SemiBold.woff2',
   'Inter-Italic.woff2': 'Inter-Italic.woff2',

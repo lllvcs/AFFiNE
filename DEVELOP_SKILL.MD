@@ -35,6 +35,7 @@ description: Use when developing on the AFFiNE self-hosted fork (config, auth, s
 | R10 `crypto.privateKey` has two consumers | the server crash-loops on a key |
 | R11 Trust nothing until it is re-run | a typecheck or grep looks too clean |
 | R12 Declare what you did not verify | before writing "done" |
+| R13 Serve browser-fetched assets same-origin | a feature works upstream and fails here |
 
 ---
 
@@ -244,6 +245,37 @@ more than once; the user can only test what you tell them to test.
 
 ---
 
+## R13. Anything the browser fetches itself must be same-origin
+
+**Do.** When a feature loads a file over the network from browser code (fonts,
+wasm, JSON), build its URL from `environment.publicPath` and ship the file in
+`packages/frontend/core/public/`, which the bundler copies to the app's output.
+Treat "the CDN is reachable" as a property of the *cloud* deployment, never of a
+self-hosted one. And when probing a path, check the payload — a SPA fallback
+answers `200 text/html` for a path that does not exist, so `response.ok` proves
+nothing; verify the magic bytes or the content type.
+
+**Because.** `cdn.affine.pro` only sends `Access-Control-Allow-Origin` for
+AFFiNE's own origins (`Origin: https://app.affine.pro` → header present;
+`Origin: https://<self-hosted host>` → absent, verified with `curl -I`). A
+`fetch`/`XMLHttpRequest` from any other origin is therefore blocked, while the
+same file would have loaded fine over a `<link>`/`@font-face` that CSS fetches in
+no-cors mode — which is why only the PDF export, the one consumer that XHRs its
+fonts, broke. `pdfmake` made it worse: it resolves every font before writing the
+document, so one blocked file aborts the whole export, and its `getBlob`
+callback is never invoked when the resolver rejects, so the failure surfaces as
+`Uncaught (in promise) TypeError: Failed to fetch` and a spinner that never ends.
+Note also that `pdfMake.vfs` is `undefined` until something assigns it (only
+`vfs_fonts` does), so pre-seeding it needs
+`pdfMake.vfs = { ...(pdfMake.vfs ?? {}), [url]: base64 }`.
+
+**Verify.** `curl -sI <instance>/fonts/Inter-Regular.woff2` returns
+`content-type: font/woff2`, and `blocksuite/affine/all/src/__tests__/adapters/pdf-fonts.unit.spec.ts`
+passes — it stubs the blocked CDN and asserts the deployment's own files win, and
+builds a real PDF from the shipped font files.
+
+---
+
 ## Pre-commit checklist
 
 1. `cargo check -p affine_server_native --lib` (clean).
@@ -251,7 +283,8 @@ more than once; the user can only test what you tell them to test.
 3. `oxlint <changed files>`.
 4. New native key? Both lists updated (R1) and the source precedence decided (R2).
 5. New reject/skip path? A log line names the input (R5).
-6. Commit message: cause, blast radius, `Verified:` and `Not verified:`.
+6. New browser-loaded asset? Served same-origin and probed for real content (R13).
+7. Commit message: cause, blast radius, `Verified:` and `Not verified:`.
 
 ## Open items
 
@@ -263,3 +296,11 @@ more than once; the user can only test what you tell them to test.
   file (it is a secret — the projection does not filter those).
 - The legacy sync bridge has **no end-to-end verification** (needs a real 0.27.4
   desktop and 0.27.1 mobile client each).
+- The PDF font path is verified by unit test and by `curl` against the instance,
+  but **not** by an actual export in a browser on the deployment. The Electron
+  build is unverified too: `environment.publicPath` is `/` there, so the resolver
+  tries the packaged `assets://` origin first and falls back to the CDN — which
+  is what it did before, but nobody has confirmed which branch wins.
+- `SarasaGothicCL-Regular.ttf` is a **subset** (GB2312 + symbols, 2.45 MB): rare
+  and traditional-only ideographs are missing from exported PDFs. Widen it with
+  `tools/pdf-fonts/subset-fonts.py --coverage gbk|cjk` if that is ever noticed.
