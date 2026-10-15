@@ -36,6 +36,8 @@ description: Use when developing on the AFFiNE self-hosted fork (config, auth, s
 | R11 Trust nothing until it is re-run | a typecheck or grep looks too clean |
 | R12 Declare what you did not verify | before writing "done" |
 | R13 Serve browser-fetched assets same-origin | a feature works upstream and fails here |
+| R14 Match the error string you actually receive | a mapping/guard never fires in production |
+| R15 An empty list has to explain itself | a helper returns nothing and nobody knows why |
 
 ---
 
@@ -273,6 +275,53 @@ Note also that `pdfMake.vfs` is `undefined` until something assigns it (only
 `content-type: font/woff2`, and `blocksuite/affine/all/src/__tests__/adapters/pdf-fonts.unit.spec.ts`
 passes — it stubs the blocked CDN and asserts the deployment's own files win, and
 builds a real PDF from the shipped font files.
+
+---
+
+## R14. Match the error string you actually receive
+
+**Do.** Before matching on a native error message, strip the
+`[affine-runtime:<code>]` prefix that `runtime/error.rs` prepends. The wrapper
+that removes it (`BackendRuntimeCoreOperations.measured`) only covers calls that
+go through `measured()`; anything delivered as a **stream event**
+(`executeCopilotStream` → `copilot-operations.ts` → `capability-runtime.ts`)
+arrives raw. Strip it in the shared matcher (`native-errors.ts`), not at each
+call site.
+
+**Because.** `mapNativeSemanticError` tested `no_compatible_target:` against a
+message that really began `[affine-runtime:no_compatible_target] `, so the
+`BadRequest` written for exactly that case was never constructed: the raw error
+fell through to the SSE layer and every AI failure reached the user as
+`internal_server_error` / "An internal error occurred", with the actionable text
+only in the log. The unit test passed throughout — it fed the matcher the *bare*
+string, which is what a hand-written fixture looks like, not what the wire
+carries.
+
+**Verify.** Paste the error line out of a real deployment log verbatim, prefix
+included, into `native-errors.spec.ts`. A test that constructs its own input only
+proves the matcher matches itself.
+
+---
+
+## R15. An empty list has to explain itself
+
+**Do.** When a routing or authorization helper can legitimately return nothing,
+accumulate the reason per branch and log one line naming all of them when the
+result is empty (`load_profiles` in `copilot/context.rs`). Never let a filter
+hide a row: select it and reject it in code so the rejection can be named — the
+`WHERE … AND enabled = TRUE` in that query is what made a disabled key
+indistinguishable from a missing one.
+
+**Because.** `profiles=0` in the route diagnostic was equally consistent with
+"the key is in another workspace", "the key is disabled", "the local BYOK lease
+expired" and "the workspace is not entitled". The settings UI then pointed at the
+wrong one (the coverage panel reports a disabled key as "not covered: needs tool
+calling"), and a round trip was spent on the tool-calling requirement when the
+key was simply not loaded.
+
+**Verify.** Disable a key, open the AI panel, and read the new
+`[affine-copilot] no BYOK profile was loaded (…): …` line — it must name the key
+and say it is disabled.
 
 ---
 

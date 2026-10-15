@@ -22,6 +22,7 @@ struct ServerProfileRow {
   encrypted_api_key: String,
   definition: serde_json::Value,
   sort_order: i32,
+  enabled: bool,
 }
 
 pub(super) struct ProfileLoadInput<'a> {
@@ -40,16 +41,37 @@ pub(super) async fn load_profiles(
   input: ProfileLoadInput<'_>,
 ) -> RuntimeResult<Vec<AuthorizedProviderProfile>> {
   let mut profiles = Vec::new();
+  // Every branch below can legitimately end with nothing to route to, and the
+  // route diagnostic only reports `profiles=0`. Collect the reason while it is
+  // still known, or "wrong workspace", "key disabled", "lease expired" and "not
+  // entitled" stay indistinguishable from the outside.
+  let mut notes: Vec<String> = Vec::new();
   let policy = config.byok_policy();
-  if let Some(workspace_id) = input.workspace_id
-    && input.access.server_byok
-  {
-    profiles.extend(load_server_profiles(pool, workspace_id, &policy).await?);
+  match input.workspace_id {
+    None => notes.push("the request carried no workspace id".to_string()),
+    Some(workspace_id) => {
+      if input.access.server_byok {
+        profiles.extend(load_server_profiles(pool, workspace_id, &policy, &mut notes).await?);
+      } else {
+        notes.push(format!(
+          "workspace {workspace_id} is not entitled to server-stored keys (serverByok=false)"
+        ));
+      }
+    }
   }
-  if let (Some(workspace_id), Some(user_id), Some(lease_id)) = (input.workspace_id, input.user_id, input.local_lease_id)
-    && input.access.local_byok
-  {
-    profiles.extend(load_local_profiles(pool, workspace_id, user_id, lease_id, &policy).await?);
+  match (input.workspace_id, input.user_id, input.local_lease_id) {
+    (Some(workspace_id), Some(user_id), Some(lease_id)) => {
+      if input.access.local_byok {
+        profiles.extend(load_local_profiles(pool, workspace_id, user_id, lease_id, &policy, &mut notes).await?);
+      } else {
+        notes.push(format!(
+          "workspace {workspace_id} is not entitled to locally stored keys (localByok=false)"
+        ));
+      }
+    }
+    _ => notes.push(
+      "the request carried no locally stored keys: a local lease needs the desktop app, which sends workspace, user and lease id (a browser cannot provide one, so its keys must be stored on the server)".to_string(),
+    ),
   }
   profiles.extend(load_managed_profiles(
     &config.copilot,
@@ -58,6 +80,17 @@ pub(super) async fn load_profiles(
     input.access.managed_tier,
     input.managed_target_id,
   )?);
+  if profiles.is_empty() && !notes.is_empty() {
+    eprintln!(
+      "[affine-copilot] no BYOK profile was loaded (workspace={} user={} lease={} serverByok={} localByok={}): {}",
+      input.workspace_id.unwrap_or("<none>"),
+      input.user_id.unwrap_or("<none>"),
+      input.local_lease_id.unwrap_or("<none>"),
+      input.access.server_byok,
+      input.access.local_byok,
+      notes.join(" | ")
+    );
+  }
   Ok(profiles)
 }
 
@@ -65,12 +98,13 @@ async fn load_server_profiles(
   pool: &PgPool,
   workspace_id: &str,
   policy: &ByokPolicy,
+  notes: &mut Vec<String>,
 ) -> RuntimeResult<Vec<AuthorizedProviderProfile>> {
   let rows = sqlx::query_as::<_, ServerProfileRow>(
     r#"
-    SELECT id, workspace_id, provider, encrypted_api_key, definition, sort_order
+    SELECT id, workspace_id, provider, encrypted_api_key, definition, sort_order, enabled
     FROM ai_workspace_byok_configs
-    WHERE workspace_id = $1 AND enabled = TRUE
+    WHERE workspace_id = $1
     ORDER BY sort_order ASC, created_at ASC
     "#,
   )
@@ -78,39 +112,54 @@ async fn load_server_profiles(
   .fetch_all(pool)
   .await
   .map_err(|error| RuntimeError::database("load authorized BYOK profiles failed", error))?;
-  rows
-    .into_iter()
-    .map(|row| {
-      let definition = serde_json::from_value::<ByokProfileDefinition>(row.definition)
-        .map_err(|error| RuntimeError::json("invalid stored BYOK definition", error))?;
-      if !policy.allows(&row.provider, &definition.endpoint) {
-        eprintln!(
-          "[affine-copilot] skipping stored BYOK profile {} (workspace {}, provider {}): the copilot.byok runtime policy does not allow this endpoint - check copilot.byok.enabled / allowedProviders / allowCustomEndpoint / allowPrivateEndpoint",
-          row.id, row.workspace_id, row.provider
-        );
-        return Ok(None);
-      }
-      let aad = server_aad(
-        &row.workspace_id,
-        &row.id,
-        &row.provider,
-        definition.endpoint_identity(),
+  if rows.is_empty() {
+    notes.push(format!(
+      "workspace {workspace_id} has no stored BYOK key at all (ai_workspace_byok_configs is empty for it) - add the key in Settings -> Workspace -> AI while THIS workspace is open"
+    ));
+    return Ok(Vec::new());
+  }
+  let mut profiles = Vec::new();
+  for row in rows {
+    if !row.enabled {
+      // The query used to filter these out, which made a disabled key look
+      // exactly like a missing one.
+      notes.push(format!(
+        "stored BYOK profile {} (provider {}) is disabled - enable it in Settings -> Workspace -> AI",
+        row.id, row.provider
+      ));
+      continue;
+    }
+    let definition = serde_json::from_value::<ByokProfileDefinition>(row.definition)
+      .map_err(|error| RuntimeError::json("invalid stored BYOK definition", error))?;
+    if !policy.allows(&row.provider, &definition.endpoint) {
+      let reason = format!(
+        "stored BYOK profile {} (workspace {}, provider {}) is not allowed by the copilot.byok runtime policy - check copilot.byok.enabled / allowedProviders / allowCustomEndpoint / allowPrivateEndpoint",
+        row.id, row.workspace_id, row.provider
       );
-      Ok(Some(authorized_byok_profile(
-        row.id,
-        ProfileSource::Server,
-        row.provider,
-        definition,
-        policy,
-        row.sort_order,
-        CredentialRef::Envelope {
-          encrypted: row.encrypted_api_key,
-          aad,
-        },
-      )))
-    })
-    .collect::<RuntimeResult<Vec<_>>>()
-    .map(|profiles| profiles.into_iter().flatten().collect())
+      eprintln!("[affine-copilot] skipping {reason}");
+      notes.push(reason);
+      continue;
+    }
+    let aad = server_aad(
+      &row.workspace_id,
+      &row.id,
+      &row.provider,
+      definition.endpoint_identity(),
+    );
+    profiles.push(authorized_byok_profile(
+      row.id,
+      ProfileSource::Server,
+      row.provider,
+      definition,
+      policy,
+      row.sort_order,
+      CredentialRef::Envelope {
+        encrypted: row.encrypted_api_key,
+        aad,
+      },
+    ));
+  }
+  Ok(profiles)
 }
 
 async fn load_local_profiles(
@@ -119,6 +168,7 @@ async fn load_local_profiles(
   user_id: &str,
   lease_id: &str,
   policy: &ByokPolicy,
+  notes: &mut Vec<String>,
 ) -> RuntimeResult<Vec<AuthorizedProviderProfile>> {
   let payload = sqlx::query(
     r#"
@@ -134,43 +184,59 @@ async fn load_local_profiles(
   .map_err(|error| RuntimeError::database("load BYOK local lease failed", error))?
   .map(|row| row.get::<serde_json::Value, _>("payload"));
   let Some(payload) = payload else {
+    notes.push(
+      "the local BYOK lease is unknown, already consumed or expired - reopen the AI panel so the client requests a new one"
+        .to_string(),
+    );
     return Ok(Vec::new());
   };
   let payload: LocalLeasePayload =
     serde_json::from_value(payload).map_err(|error| RuntimeError::json("invalid BYOK local lease", error))?;
   if payload.workspace_id != workspace_id || payload.user_id != user_id {
+    notes.push(format!(
+      "the local BYOK lease belongs to workspace {} / user {}, not to this request (workspace {} / user {})",
+      payload.workspace_id, payload.user_id, workspace_id, user_id
+    ));
     return Ok(Vec::new());
   }
-  Ok(
-    payload
-      .providers
-      .into_iter()
-      .enumerate()
-      .filter(|(_, provider)| provider.enabled && policy.allows(&provider.provider, &provider.definition.endpoint))
-      .map(|(index, provider)| {
-        let aad = local_aad(
-          workspace_id,
-          user_id,
-          lease_id,
-          index,
-          &provider.provider,
-          provider.definition.endpoint_identity(),
-        );
-        authorized_byok_profile(
-          format!("{lease_id}:{index}"),
-          ProfileSource::Local,
-          provider.provider,
-          provider.definition,
-          policy,
-          index as i32,
-          CredentialRef::Envelope {
-            encrypted: provider.encrypted_credential,
-            aad,
-          },
-        )
-      })
-      .collect(),
-  )
+  let mut profiles = Vec::new();
+  for (index, provider) in payload.providers.into_iter().enumerate() {
+    if !provider.enabled {
+      notes.push(format!(
+        "locally stored key #{} (provider {}) is disabled",
+        index, provider.provider
+      ));
+      continue;
+    }
+    if !policy.allows(&provider.provider, &provider.definition.endpoint) {
+      notes.push(format!(
+        "locally stored key #{} (provider {}) is not allowed by the copilot.byok runtime policy",
+        index, provider.provider
+      ));
+      continue;
+    }
+    let aad = local_aad(
+      workspace_id,
+      user_id,
+      lease_id,
+      index,
+      &provider.provider,
+      provider.definition.endpoint_identity(),
+    );
+    profiles.push(authorized_byok_profile(
+      format!("{lease_id}:{index}"),
+      ProfileSource::Local,
+      provider.provider,
+      provider.definition,
+      policy,
+      index as i32,
+      CredentialRef::Envelope {
+        encrypted: provider.encrypted_credential,
+        aad,
+      },
+    ));
+  }
+  Ok(profiles)
 }
 
 fn load_managed_profiles(

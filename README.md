@@ -167,6 +167,39 @@ it tried instead of hanging.
 
 *Commits:* this change (the commit message lists what was verified where).
 
+### 1.9 AI assistant: the reason a request fails is now visible
+
+A BYOK key can test green and chat still fail, with the cause only in the server
+log. Two links in that chain were broken, both fixed:
+
+* **The native error prefix was never stripped.** The native layer wraps every
+  error as `[affine-runtime:<code>] <message>`;
+  `BackendRuntimeCoreOperations.measured` strips it, but errors delivered as
+  *stream events* (`executeCopilotStream`) never pass through that wrapper — so
+  `mapNativeSemanticError` failed to match `no_compatible_target`, rethrew the raw
+  error, and the SSE layer reported it as
+  `Internal Server Error: An internal error occurred`. Matching now happens on the
+  unprefixed reason, so the user gets the actionable message (which names the
+  workspace-settings page and the use cases to check).
+* **`profiles=0` could not be explained.** "Key added in another workspace", "key
+  disabled", "local lease expired" and "not entitled" all looked identical: the
+  SQL filtered `enabled = TRUE` so a disabled row was indistinguishable from a
+  missing one, and every local-lease rejection was silent. `load_profiles` now
+  collects the reason for each branch and prints one
+  `[affine-copilot] no BYOK profile was loaded (…): <reasons>` line when nothing
+  was loaded.
+
+**Is tool calling required? Yes.** The built-in `Chat With AFFiNE AI` prompt
+declares 15 tools (`docRead`, `docSearch`, `artifactSearch`, `webSearch`,
+`docCompose`, `codeArtifact`, …); whenever a request carries tools, the native
+layer adds `features: ["tool_calling"]` to the `chat.default` slot. The "Workspace
+All Docs" switch in the chat input only removes eight of them (the retrieval and
+doc-reading ones) — `artifactRead`, `artifactSearch`, `webSearch`, `docCompose`
+and `codeArtifact` are still sent, so turning it off does **not** make a model
+without tool calling usable.
+
+*Commits:* this change.
+
 ---
 
 ## 2. Deploy
@@ -488,13 +521,32 @@ found`).** The workspace root document is created by a client and pushed over
 sync; if the socket cannot join, it never lands. Fix the sync path above, then
 re-open the workspace (or create a new one) with a working client.
 
-**AI chat fails with `no_compatible_target`.** Chat always sends tools, so the
-route needs a model declaring `tool_calling`; a model with only text output is
-rejected. Either declare tool calling for the model in your gateway, or turn off
-the tools that chat enables by default (workspace search, reading docs). Since
-`a16e5f3` the error names the required capability instead of only the reason.
-Note that the BYOK "test" button probes your provider directly and does **not**
-run the routing decision, so a green test does not prove that chat will work.
+**AI chat fails with `no_compatible_target`.** Read the
+`[affine-copilot] no BYOK profile was loaded (…): …` line in the server log (new
+in this fork) immediately before it — it says why the key was not loaded: not
+added in **this** workspace, disabled, an expired local lease, or not entitled.
+Those four used to be indistinguishable, so do not guess.
+
+If the key did load, the reason is capability: chat always sends tools, so the
+route needs a model declaring `tool_calling`, and a model with only text output is
+rejected. Declare tool calling for the model in your gateway or pick a model that
+supports it — turning off the "Workspace All Docs" switch in the chat input is
+**not** enough (see §1.9). The BYOK "test" button probes your provider directly and
+does **not** run the routing decision, so a green test does not prove that chat
+will work.
+
+**AI chat returns `Internal Server Error: An internal error occurred` while the
+log shows `copilot route unavailable: …`.** On an image built before §1.9 that is
+the error mapping failing, and the real reason is in that native diagnostic line:
+`slot=` is the requested slot, `workspace=` the workspace the chat ran in, and
+`profiles=` how many BYOK profiles were routed. `profiles=0` means no **enabled**
+key participates for that workspace — compare it with
+
+```sql
+select id, workspace_id, provider, name, enabled, sort_order
+from ai_workspace_byok_configs
+order by workspace_id, sort_order;
+```
 
 **`affine_server` restarts in a loop.** Read the error: a missing or malformed
 `crypto.privateKey` produces `stable crypto.privateKey is required …` or

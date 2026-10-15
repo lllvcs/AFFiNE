@@ -1509,7 +1509,7 @@
   "com.affine.settings.workspace.byok.row.activity.unused": "尚未使用",
   "com.affine.settings.workspace.byok.coverage.title": "功能覆盖",
   "com.affine.settings.workspace.byok.coverage.not-covered": "未被任何已启用的密钥覆盖。",
-  "com.affine.settings.workspace.byok.coverage.chat-not-covered": "AI 对话未被覆盖：对话需要既能输出文本、又支持工具调用（tool calling）的模型——请在上面的密钥中为某个模型同时勾选「对话」和「动作」用例。",
+  "com.affine.settings.workspace.byok.coverage.chat-not-covered": "AI 对话未被覆盖：对话需要一条已启用的密钥，且其模型既能输出文本、又支持工具调用（tool calling）——请确认该密钥已启用，并为其中某个模型同时勾选「对话」和「动作」用例。密钥只在添加它的工作区里生效。",
   "com.affine.settings.workspace.byok.feature.chat.title": "写作与聊天",
   "com.affine.settings.workspace.byok.feature.chat.fallback": "当某个密钥声明了文本输出与工具调用（「对话」+「动作」用例）时覆盖。",
   "com.affine.settings.workspace.byok.feature.action.title": "动作与结构化输出",

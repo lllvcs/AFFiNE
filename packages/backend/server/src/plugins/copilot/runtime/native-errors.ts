@@ -8,6 +8,20 @@ import {
 
 const LLM_TIMEOUT_ERROR_PREFIX = 'llm_timeout:';
 
+/**
+ * Every error crossing the native boundary is wrapped by `runtime/error.rs` as
+ * `[affine-runtime:<code>] <message>`.
+ *
+ * `BackendRuntimeCoreOperations.measured` strips that prefix while it wraps the
+ * error in a `BackendRuntimeError`, but errors that arrive as *stream events*
+ * (`executeCopilotStream` callbacks, `copilot-operations.ts`) never pass through
+ * that wrapper. They reach `mapNativeSemanticError` raw, prefixed — and an
+ * unmatched reason is rethrown untouched, which the SSE layer then reports to
+ * the user as `internal_server_error`. That is exactly how the route diagnostic
+ * introduced for `no_compatible_target` failed to reach anyone.
+ */
+const RUNTIME_ERROR_PREFIX = /^\s*\[affine-runtime:[a-z0-9_]+\]\s*/;
+
 const logger = new Logger('CopilotRuntime');
 
 /**
@@ -56,17 +70,17 @@ function routeFailureMessage(reason: RouteFailureReason, message: string) {
 }
 
 function nativeErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (
-    error &&
-    typeof error === 'object' &&
-    typeof (error as { message?: unknown }).message === 'string'
-  ) {
-    return (error as { message: string }).message;
-  }
-  return typeof error === 'string' ? error : undefined;
+  const message =
+    error instanceof Error
+      ? error.message
+      : error &&
+          typeof error === 'object' &&
+          typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message
+        : typeof error === 'string'
+          ? error
+          : undefined;
+  return message?.replace(RUNTIME_ERROR_PREFIX, '');
 }
 
 export function mapNativeSemanticError(error: unknown): unknown {

@@ -30,6 +30,7 @@
 | Self-hosting docs | `9bb4520` `f422eeb` `3fb9695` | `server.hosts` semantics, the two config readers, the two-list rule |
 | Image pipeline | `b4781c0` … `fdf8f1b` | build and publish split, registry-to-registry copy, Pro public key gate |
 | PDF export fonts | this change | fonts resolve against the deployment's own origin first; Sarasa Gothic CL subset shipped in `@affine/core/public/fonts`; missing fonts degrade with a warning instead of hanging |
+| AI route diagnostics | this change | the `[affine-runtime:…]` prefix is stripped before matching, so route failures reach the user as actionable messages; every skipped BYOK profile is named |
 
 ---
 
@@ -159,6 +160,57 @@ the fontkit copy inside pdfmake 0.2.20 cannot decode (`TTFSubset.encode` →
 `Cannot read properties of undefined (reading 'version')`), so TTF it is — see
 `tools/pdf-fonts/README.md`.
 
+### 2.8 The AI panel said `Internal Server Error` and `profiles=0` explained nothing
+
+**Symptom:** a BYOK key was configured, the settings "test" button passed, the
+coverage panel said *"AI chat is not covered: it needs a model that outputs text
+and supports tool calling"*, and every chat turn failed with
+`Internal Server Error: An internal error occurred. Identify: INTERNAL_SERVER_ERROR`.
+The server log held the truth:
+
+```
+[affine-copilot] copilot route unavailable: no_compatible_target: slot=chat.default
+  required={… "features":["tool_calling"] …} workspace=7bd8daf4-… deployment=selfhosted
+  copilot.byok.enabled=true serverByok=true localByok=true profiles=0
+  (no BYOK profile was loaded for this workspace…)
+ERROR [Sse] internal_server_error ({"endpoint":"chat_object","stage":"stream"})
+```
+
+**Cause:** two independent defects, and the visible one hid the real one.
+
+1. *The user-facing mapping never ran.* `runtime/error.rs` wraps every native
+   error as `[affine-runtime:<code>] <message>`. `BackendRuntimeCoreOperations.measured`
+   strips that prefix, but the copilot **stream** path bypasses it: the callback in
+   `copilot-operations.ts` pushes `error.message` straight into the event stream,
+   and `capability-runtime.ts` rebuilds an `Error` from it. `routeFailureReason`
+   matches `message === reason || message.startsWith("reason:")`, which the
+   prefixed string satisfies neither, so `mapNativeSemanticError` returned the
+   error unchanged and the SSE layer turned it into `internal_server_error`. The
+   `BadRequest` carrying the actionable guidance existed, was unit-tested, and was
+   unreachable — the spec fed it the bare string.
+2. *`profiles=0` had four possible meanings and said none of them.*
+   `load_server_profiles` filtered `enabled = TRUE` in SQL, so a disabled key and
+   a key stored in another workspace produced the identical diagnostic; and
+   `load_local_profiles` dropped expired leases, workspace mismatches, disabled
+   providers and policy rejections silently. The coverage panel made it worse by
+   reporting a disabled key as "not covered — needs tool calling", which sends the
+   reader after the wrong thing.
+
+**Fix:** strip the prefix inside `nativeErrorMessage` (one place, covers every
+caller), and have `load_profiles` collect a reason per branch — selecting
+`enabled` instead of filtering on it — then log a single
+`[affine-copilot] no BYOK profile was loaded (…): …` line when nothing came back.
+The coverage string now also says the key must be enabled and that it only applies
+to the workspace it was added in.
+
+**Answer to the question it raised:** yes, chat requires tool calling. The
+built-in `Chat With AFFiNE AI` prompt declares 15 tools, the native layer adds
+`ModelFeature::ToolCalling` to `chat.default` whenever `!request.tools.is_empty()`,
+and the "Workspace All Docs" switch in the chat input only filters eight of them
+(`docSearch`, `docRead`, `docCanvasRead`, the four `frontend*` readers) — so
+`artifactRead`, `artifactSearch`, `webSearch`, `docCompose` and `codeArtifact`
+still make the requirement binding.
+
 ---
 
 ## 3. Architecture notes
@@ -203,6 +255,14 @@ node_modules/.bin/vitest run --project @blocksuite/affine blocksuite/affine/all/
 # PDF fonts: does the instance serve them itself?
 curl -sI https://<host>/fonts/Inter-Regular.woff2 | grep -i content-type
 curl -sI -H 'Origin: https://<host>' https://cdn.affine.pro/fonts/Inter-Regular.woff | grep -i access-control
+
+# AI route diagnostics: the mapping tests are ava specs (CI), see trap 8 for a
+# local substitute.
+node_modules/.bin/ava packages/backend/server/src/plugins/copilot/runtime/__tests__/
+
+# Which BYOK keys exist, in which workspace, enabled?
+docker compose exec postgres psql -U affine -c \
+  "select id, workspace_id, provider, name, enabled from ai_workspace_byok_configs order by workspace_id, sort_order;"
 ```
 
 Traps that produced wrong conclusions here:
@@ -222,6 +282,15 @@ Traps that produced wrong conclusions here:
    `Intl.DateTimeFormat().resolvedOptions().locale` is `zh-SG`, so
    `'入口'.localeCompare('duplicate') === -1` and
    `markdown.unit.spec.ts > … duplicate names` fails here while passing on CI.
+8. The server package's `ava` cannot start **at all** in this checkout: its
+   `require: ['./src/prelude.ts']` prelude is resolved against
+   `node_modules/.cache/ava`, so every spec dies with `ERR_MODULE_NOT_FOUND`
+   before running. To execute a server-side module here, build it
+   (`tsc -b packages/backend/server/tsconfig.json`) and drive the compiled
+   `dist/**` from a scratch script, or run the TypeScript through vitest with
+   `unplugin-swc` configured for legacy decorators + metadata (the NestJS
+   `@Field` decorators in `errors.gen.ts` need both; `tsx`/esbuild does not emit
+   them).
 
 ---
 

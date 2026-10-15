@@ -69,6 +69,29 @@ AFFiNE 0.27.5 用 `space:join-batch` 取代了基于房间的同步协议，并*
 
 *提交：* `b4781c0`、`24f5675`、`d7d383b`、`d96b436`、`fa43b17`、`a49759d`、`4c85772`、`e1bcbd4`、`fdf8f1b`。
 
+### 1.8 「导出 PDF」在自托管域名下可用
+
+`pdfmake` 在写文档之前会用 `XMLHttpRequest` 逐个拉取字体，而 `cdn.affine.pro` 只对 AFFiNE 自家的来源返回 `Access-Control-Allow-Origin`，所以在任何其它域名上导出都会中断于
+
+```
+Access to XMLHttpRequest at 'https://cdn.affine.pro/fonts/Inter-Regular.woff'
+from origin 'https://<你的域名>' has been blocked by CORS policy
+Uncaught (in promise) TypeError: Failed to fetch
+```
+
+并且不产出任何文件。现在导出器会**先**从部署自身的资源根目录取字体（`<publicPath>/fonts/…`，画布字体一直用的是这里），CDN 只作为第二选择；同时会校验响应体真的是字体——路径不存在时 SPA 回退会返回 `200 text/html`，只看 `response.ok` 会把它当成字体收下。
+
+镜像里现在带了一份中文字体：`SarasaGothicCL-Regular.ttf`，是 Sarasa Gothic CL 的 2.5 MB 子集，覆盖 GB2312 加上拉丁、希腊、西里尔、假名与中文标点。可用 `python tools/pdf-fonts/subset-fonts.py --coverage gbk` 重新生成或加宽，详见 [`tools/pdf-fonts/README.md`](./tools/pdf-fonts/README.md)。中文字体缺失时导出仍会进行（用 Inter 并打警告）：拉丁文本正常，中文不行；一款字体都加载不到时会直接报出所有尝试过的 URL，而不是一直挂住。
+
+### 1.9 AI 助手：失败原因能被看见了
+
+自托管上 BYOK 配置好、点「测试」也通过，对话仍可能失败，而且原因被藏在服务端日志里。这条链路上有两个坑，现在都补上了：
+
+* **原生错误前缀没被剥掉。** native 层把所有错误包成 `[affine-runtime:<code>] <message>`，`BackendRuntimeCoreOperations.measured` 会剥掉它，但**流式**返回的错误（`executeCopilotStream`）不经过那个包装，于是 `mapNativeSemanticError` 匹配不上 `no_compatible_target`，原样抛给 SSE 层，用户只看到 `Internal Server Error: An internal error occurred`。现在匹配前先剥前缀，用户会看到真正的可操作提示（写明了去 Settings → Workspace → AI 检查什么）。
+* **`profiles=0` 说不清为什么。** 以前「密钥加在别的工作区」「密钥被停用」「本地租约过期」「没有授权」四种情况长得一模一样：SQL 里直接 `WHERE enabled = TRUE` 把停用的行滤掉了，本地租约的每条过滤也都是静默的。现在 `load_profiles` 会把每条跳过原因收集起来，在一条 profile 都没加载到时打印一行 `[affine-copilot] no BYOK profile was loaded (…): <原因>`。
+
+**关于 tool calling：是，必须支持。** 内置的 `Chat With AFFiNE AI` 提示词自带 15 个工具（`docRead`/`docSearch`/`artifactSearch`/`webSearch`/`docCompose`/`codeArtifact` …），只要请求里带 tools，native 就会给 `chat.default` 槽位加上 `features: ["tool_calling"]`。对话输入框里的「Workspace All Docs」开关只滤掉其中 8 个（检索与读文档类），剩下的 `artifactRead`/`artifactSearch`/`webSearch`/`docCompose`/`codeArtifact` 仍然会发出去——所以关掉它并不能让不支持 tool calling 的模型可用。
+
 ---
 
 ## 2. 部署
@@ -302,6 +325,20 @@ AFFINE_AUTH_SIGN_IN_PASSWORD=false AFFINE_AUTH_SIGN_IN_MAGIC_LINK=false AFFINE_A
 
 `config.json` 的改动重启后生效；环境变量的改动一律需要重启。
 
+### 5.1 与上游同步
+
+`upstream` 指向 `https://github.com/toeverything/AFFiNE.git`。本分支自己的提交都压在 `canary` 上，所以同步就是一次普通合并：
+
+```sh
+git fetch upstream canary
+git merge upstream/canary          # 解决冲突后跑一遍 §7 里的检查
+git push origin canary
+```
+
+最近一次同步：上游 `0b69a6d`（22 个提交——依赖升级，含 Electron 41 / eslint 10 / esbuild 0.28 / nodemailer 10 / dompurify 3.4.16 等安全更新，m4a 音频切片、transcript 截断、blob 读缓存与同步时序，`packages/frontend/native` 的 obsidian/onenote 导入器重写，以及 latex/katex 0.18）。合并无冲突：双方只碰到 `packages/backend/native/index.d.ts`、`packages/backend/server/src/native.ts`、Electron 的 `package.json` 和两个 `i18n` 资源文件，且改动区域互不重叠。
+
+会动到 `yarn.lock` 的同步之后需要跑 `yarn install`。
+
 ---
 
 ## 6. 故障排查
@@ -312,7 +349,19 @@ AFFINE_AUTH_SIGN_IN_PASSWORD=false AFFINE_AUTH_SIGN_IN_MAGIC_LINK=false AFFINE_A
 
 **新建工作区报 `DOC_NOT_FOUND`（`Doc <id> under Space <id> not found`）。** 工作区根文档是**客户端**创建并通过同步推上去的；WebSocket 进不来，它就永远不存在。先修好上面的同步链路，再用能正常同步的客户端打开该工作区（或新建一个）。
 
-**AI 对话报 `no_compatible_target`。** 对话总是带 tools，因此路由要求模型声明 `tool_calling`；只有文本输出的模型会被拒。要么在你的网关/模型上声明工具调用能力，要么关掉对话默认开启的 tools（工作区检索、读取文档）。自 `a16e5f3` 起报错会写明所需能力而不只是原因。注意：BYOK 的"测试"按钮是直接探测你的提供方，**不走路由决策**，所以测试通过不代表对话可用。
+**AI 对话报 `no_compatible_target`。** 先看服务端日志里紧跟其后的那行 `[affine-copilot] no BYOK profile was loaded (…): …`（自本次改动起），它直接说明密钥为什么没被加载：没加在**当前**工作区、被停用了、本地租约过期，或者没有授权。四者症状完全一样，别靠猜。
+
+确认密钥本身没问题后，再看能力要求：对话总是带 tools，因此路由要求模型声明 `tool_calling`；只有文本输出的模型会被拒。要么在你的网关/模型上声明工具调用能力，要么换一个支持它的模型。自 `a16e5f3` 起报错会写明所需能力而不只是原因，本次改动前这条提示其实**没能送到前端**（原生错误前缀没剥掉，被降级成了 `Internal Server Error`）——如果你在旧镜像上只看到 `An internal error occurred`，请以服务端日志为准。注意：BYOK 的"测试"按钮是直接探测你的提供方，**不走路由决策**，所以测试通过不代表对话可用。
+
+**AI 对话报 `Internal Server Error: An internal error occurred`，日志里有 `copilot route unavailable: …`。** 旧镜像上这是错误映射失效的表现（见 §1.9），真正的失败原因就在那行 native 诊断里：`slot=` 是请求的槽位，`workspace=` 是发起对话的工作区，`profiles=` 是加载到的 BYOK profile 数量。`profiles=0` 表示那条工作区下没有任何**已启用**的密钥参与路由——用下面的 SQL 对照 `workspace=` 的值即可：
+
+```sql
+select id, workspace_id, provider, name, enabled, sort_order
+from ai_workspace_byok_configs
+order by workspace_id, sort_order;
+```
+
+**「导出 PDF」没有任何文件产出，控制台里 `cdn.affine.pro` 的字体请求被 CORS 拦截。** 导出器在访问 CDN 而不是你的实例。确认 `<你的域名>/fonts/Inter-Regular.woff2` 返回的是 `font/woff2`（而不是 `text/html`），并且镜像里有 `packages/frontend/core/public/fonts/SarasaGothicCL-Regular.ttf`；见 §1.8 与 [`tools/pdf-fonts/README.md`](./tools/pdf-fonts/README.md)。
 
 **`affine_server` 无限重启。** 看报错内容：缺 `crypto.privateKey` 或格式不对会分别报 `stable crypto.privateKey is required …` 与 `1E08010C:DECODER routines::unsupported`，见 §2.3。
 
@@ -332,6 +381,7 @@ AFFINE_AUTH_SIGN_IN_PASSWORD=false AFFINE_AUTH_SIGN_IN_MAGIC_LINK=false AFFINE_A
 | Copilot 诊断 | `packages/backend/native/src/runtime/backend_runtime/copilot/*`、`packages/backend/server/src/plugins/copilot/runtime/native-errors.ts` |
 | 前端登录 / BYOK | `packages/frontend/core/src/components/sign-in/*`、`.../setting/workspace-setting/byok/*` |
 | 配置管线 | `packages/backend/server/src/base/config/*` |
+| PDF 导出字体 | `blocksuite/affine/shared/src/adapters/pdf/pdf-fonts.ts`、`packages/frontend/core/public/fonts/*`、`tools/pdf-fonts/*` |
 | 镜像流水线 | `.github/workflows/*.yml` |
 
 验证命令（都在仓库根目录执行）：
@@ -368,3 +418,5 @@ yarn affine <task>
 本分支跟随上游 AFFiNE，并沿用其许可：见 [`LICENSE`](./LICENSE) 与 [`LICENSE-MIT`](./LICENSE-MIT)。AFFiNE 的一切功劳属于
 [TOEVERYTHING PTE. LTD. 及其贡献者](https://github.com/toeverything/AFFiNE)。
 本仓库的改动即 [§1](#1-本分支相对上游的改动) 所列的那些——它们的存在只是为了让自托管部署能正常工作，也希望能对别人有用。
+
+`packages/frontend/core/public/fonts/SarasaGothicCL-Regular.ttf` 是 [Sarasa Gothic](https://github.com/be5invis/Sarasa-Gothic)（作者 Renzhi Li 及贡献者）的子集，按 SIL Open Font License 1.1 分发——许可全文随字体一同提供，见 `SarasaGothicCL-LICENSE.txt`。同目录下的 `Inter-*.woff2` 来自 Inter 项目，同样是 OFL。
